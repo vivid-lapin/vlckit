@@ -13,12 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: |
-          ./compileAndBuildVLCKit.sh -x -f
-          ls -lah ./build
+        run: ./Packaging/create-distributable-package.sh -x -m -d
         shell: bash
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: build
-          path: ./build/*.xcarchive
+          name: dmg
+          path: "*.dmg"
