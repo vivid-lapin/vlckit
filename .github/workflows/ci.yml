@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: ./Packaging/create-distributable-package.sh -x -m -d
+        shell: bash
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmg
+          path: "*.dmg"
