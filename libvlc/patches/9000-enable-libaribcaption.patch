@@ -1,0 +1,35 @@
+From cf755d540ab5d81bef22d7f2aa3d6675d387d139 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 1 Sep 2025 22:18:49 +0900
+Subject: [PATCH] enable libaribcaption
+
+---
+ contrib/src/ffmpeg/rules.mak | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/contrib/src/ffmpeg/rules.mak b/contrib/src/ffmpeg/rules.mak
+index 7bc4afe..92e4729 100644
+--- a/contrib/src/ffmpeg/rules.mak
++++ b/contrib/src/ffmpeg/rules.mak
+@@ -37,7 +37,8 @@ FFMPEGCONF = --prefix="$(PREFIX)" --enable-static --disable-shared \
+ 	--disable-iconv \
+ 	--disable-avisynth \
+ 	--disable-nvenc \
+-	--disable-linux-perf
++	--disable-linux-perf \
++	--enable-libaribcaption
+ ifdef HAVE_DARWIN_OS
+ FFMPEGCONF += \
+ 	--disable-securetransport
+@@ -47,7 +48,7 @@ ifdef ENABLE_PDB
+ FFMPEGCONF += --ln_s=false
+ endif
+
+-DEPS_ffmpeg = zlib $(DEPS_zlib) gsm $(DEPS_gsm) openjpeg $(DEPS_openjpeg)
++DEPS_ffmpeg = zlib $(DEPS_zlib) gsm $(DEPS_gsm) openjpeg $(DEPS_openjpeg) libaribcaption $(DEPS_libaribcaption)
+
+ # Optional dependencies
+ ifndef BUILD_NETWORK
+--
+2.39.1
+
