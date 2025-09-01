@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          ./compileAndBuildVLCKit.sh -x -f
+          ls -lah ./build
+        shell: bash
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: ./build/*.xcarchive
