@@ -55,7 +55,7 @@ EOF
 
 }
 
-while getopts "hvmxiwtza" OPTION
+while getopts "hvmxiwtzad" OPTION
 do
      case $OPTION in
          h)
@@ -86,7 +86,7 @@ do
          z)
              USEZIP=yes
              ;;
-         z)
+         d)
              USEDMG=yes
              USECOMPRESSEDARCHIVE=no
              ;;
