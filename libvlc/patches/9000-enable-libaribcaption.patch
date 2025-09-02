@@ -1,11 +1,12 @@
-From cf755d540ab5d81bef22d7f2aa3d6675d387d139 Mon Sep 17 00:00:00 2001
+From 0e31978d3d64d5b96a2f6794d2604110765e296f Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
-Date: Mon, 1 Sep 2025 22:18:49 +0900
+Date: Wed, 3 Sep 2025 01:09:58 +0900
 Subject: [PATCH] enable libaribcaption
 
 ---
- contrib/src/ffmpeg/rules.mak | 5 +++--
- 1 file changed, 3 insertions(+), 2 deletions(-)
+ contrib/src/ffmpeg/rules.mak    | 5 +++--
+ extras/package/apple/build.conf | 1 +
+ 2 files changed, 4 insertions(+), 2 deletions(-)
 
 diff --git a/contrib/src/ffmpeg/rules.mak b/contrib/src/ffmpeg/rules.mak
 index 7bc4afe..92e4729 100644
@@ -30,6 +31,18 @@ index 7bc4afe..92e4729 100644
 
  # Optional dependencies
  ifndef BUILD_NETWORK
+diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
+index 116529f..0dd400a 100644
+--- a/extras/package/apple/build.conf
++++ b/extras/package/apple/build.conf
+@@ -78,6 +78,7 @@ export VLC_CONTRIB_OPTIONS_BASE=(
+     --disable-medialibrary
+     --disable-sqlite
+     --disable-decklink
++    --enable-libaribcaption
+ )
+
+ # Additional contrib bootstrap options for macOS
 --
 2.39.1
 
