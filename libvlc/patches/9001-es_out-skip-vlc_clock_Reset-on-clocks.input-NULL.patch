@@ -1,0 +1,38 @@
+From 9422cf0aff82dc1b2df0d054b0827596ed373f4e Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 8 Sep 2025 01:27:19 +0900
+Subject: [PATCH] es_out: skip vlc_clock_Reset on clocks.input == NULL
+
+---
+ src/input/es_out.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index 0f295c1..969104c 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -971,7 +971,9 @@ static void EsOutChangePosition(es_out_sys_t *p_sys, bool b_flush,
+         input_clock_Reset(pgrm->p_input_clock);
+         vlc_clock_main_Lock(pgrm->clocks.main);
+         pgrm->i_last_pcr = VLC_TICK_INVALID;
+-        vlc_clock_Reset(pgrm->clocks.input);
++        if (pgrm->clocks.input != NULL) {
++            vlc_clock_Reset(pgrm->clocks.input);
++        }
+         vlc_clock_main_Unlock(pgrm->clocks.main);
+     }
+
+@@ -1335,7 +1337,9 @@ ClockListenerReset(void *opaque)
+ {
+     es_out_pgrm_t *pgrm = opaque;
+     vlc_clock_Lock(pgrm->clocks.input);
+-    vlc_clock_Reset(pgrm->clocks.input);
++    if (pgrm->clocks.input != NULL) {
++        vlc_clock_Reset(pgrm->clocks.input);
++    }
+     vlc_clock_Unlock(pgrm->clocks.input);
+ }
+
+--
+2.39.1
+
