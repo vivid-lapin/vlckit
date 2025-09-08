@@ -5,6 +5,13 @@ on:
     branches:
       - master
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        type: boolean
+        required: true
+        default: true
+        description: "do release?"
 
 jobs:
   build:
@@ -20,3 +27,19 @@ jobs:
         with:
           name: dmg
           path: "*.dmg"
+      - name: Get current time
+        if: ${{ github.event.inputs.release }}
+        uses: josStorer/get-current-time@v2
+        id: time
+        with:
+          format: "YYYYMMDDHHmm"
+          utcOffset: "+09:00"
+      - name: Release
+        if: ${{ github.event.inputs.release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.dmg"
+          name: ${{ steps.time.outputs.formattedTime }}
+          tag_name: ${{ steps.time.outputs.formattedTime }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
