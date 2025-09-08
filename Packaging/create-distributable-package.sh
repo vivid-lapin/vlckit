@@ -219,7 +219,25 @@ rm -rf "${DMGFOLDERNAME}"
 info "Collecting items"
 mkdir -p "${DMGFOLDERNAME}"
 mkdir -p "${DMGFOLDERNAME}/Sample Code"
-if [ "$BUILDFORALL" = "yes" ]; then
+
+platform_count=0
+if [ "$MACOS" = "yes" ]; then
+    platform_count=$((platform_count + 1))
+fi
+if [ "$IOS" = "yes" ]; then
+    platform_count=$((platform_count + 1))
+fi
+if [ "$TVOS" = "yes" ]; then
+    platform_count=$((platform_count + 1))
+fi
+if [ "$XROS" = "yes" ]; then
+    platform_count=$((platform_count + 1))
+fi
+if [ "$WATCHOS" = "yes" ]; then
+    platform_count=$((platform_count + 1))
+fi
+
+if [ "$BUILDFORALL" = "yes" ] || [ $platform_count -gt 1 ]; then
 	PROJECT_DIR=`pwd`
 	rm -rf build/VLCKit.xcframework
     xcodebuild -create-xcframework $frameworks -output build/VLCKit.xcframework
