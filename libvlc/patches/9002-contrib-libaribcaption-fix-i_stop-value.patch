@@ -1,0 +1,35 @@
+From 2766b0116ab8b7cb1f2f2c7238772225b8a857c1 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 14 Sep 2025 06:34:14 +0000
+Subject: [PATCH] contrib: libaribcaption: fix i_stop value
+
+---
+ modules/codec/arib/libaribcaption.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
+index e6d116e35bf..b0e32260d39 100644
+--- a/modules/codec/arib/libaribcaption.c
++++ b/modules/codec/arib/libaribcaption.c
+@@ -263,14 +263,15 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
+         block_Release(p_block);
+         return VLCDEC_SUCCESS;
+     }
++
+     p_spu->i_start = p_block->i_pts;
+-    p_spu->i_stop = p_block->i_pts;
+     p_spu->b_fade = p_sys->b_cfg_fadeout;
+
+-    if (caption.wait_duration == ARIBCC_DURATION_INDEFINITE) {
++    if (caption.wait_duration == ARIBCC_DURATION_INDEFINITE || caption.wait_duration <= 0) {
+         p_spu->b_ephemer = true;
++        p_spu->i_stop = VLC_TICK_INVALID;
+     } else {
+-        p_spu->i_stop = p_block->i_pts + VLC_TICK_FROM_MS(caption.wait_duration);
++        p_spu->i_stop = p_spu->i_start + VLC_TICK_FROM_MS(caption.wait_duration);
+     }
+
+
+--
+2.50.1
+
