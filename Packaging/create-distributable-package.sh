@@ -167,7 +167,7 @@ spushd ${root}
 if [ "$MACOS" = "yes" ]; then
     if [ ! -e "build/macOS/VLCKit.xcframework" ]; then
         info "VLCKit for macOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -x -f
+        ./compileAndBuildVLCKit.sh -x -f -r
     fi
     dsymfolder=$BUILD_DIR/VLCKit-macosx.xcarchive/dSYMs/VLCKit.framework.dSYM
     frameworks="$frameworks -framework $BUILD_DIR/VLCKit-macosx.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
@@ -185,7 +185,7 @@ fi
 if [ "$IOS" = "yes" ]; then
     if [ ! -e "build/iOS/VLCKit.xcframework" ]; then
         info "VLCKit for iOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -f
+        ./compileAndBuildVLCKit.sh -f -r
     fi
     dsymfolder=$BUILD_DIR/VLCKit-iphonesimulator.xcarchive/dSYMs/VLCKit.framework.dSYM
     frameworks="$frameworks -framework $BUILD_DIR/VLCKit-iphonesimulator.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
