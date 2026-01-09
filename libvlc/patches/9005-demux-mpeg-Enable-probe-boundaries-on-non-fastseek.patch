@@ -1,0 +1,39 @@
+From f69d6e81daff873b867ced6692563a454b939015 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 9 Jan 2026 22:55:48 +0900
+Subject: [PATCH] demux/mpeg: Enable probe boundaries on non-fastseek
+
+---
+ modules/demux/mpeg/ts.c     | 2 +-
+ modules/demux/mpeg/ts_psi.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 642947e346..a2001aca81 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -1978,7 +1978,7 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_see
+     if( vlc_stream_GetSize( p_sys->stream, &i_stream_size ) != VLC_SUCCESS )
+       return VLC_EGENERIC;
+ 
+-    if( !p_sys->b_canfastseek || i_stream_size < p_sys->i_packet_size )
++    if( !p_sys->b_canseek || i_stream_size < p_sys->i_packet_size )
+         return VLC_EGENERIC;
+ 
+     const uint64_t i_initial_pos = vlc_stream_Tell( p_sys->stream );
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index fdf198e224..17c909fd44 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -2227,7 +2227,7 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+     UpdatePESFilters( p_demux, p_sys->seltype == PROGRAM_ALL );
+ 
+     /* Probe Boundaries */
+-    if( p_sys->b_canfastseek && !p_pmt->b_last_dts_probed )
++    if( p_sys->b_canseek && !p_pmt->b_last_dts_probed )
+     {
+         ProbeStart( p_demux, p_pmt->i_number );
+         ProbeEnd( p_demux, p_pmt->i_number );
+-- 
+2.39.1
+
