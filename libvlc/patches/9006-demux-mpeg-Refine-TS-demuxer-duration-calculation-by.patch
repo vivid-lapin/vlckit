@@ -1,0 +1,159 @@
+From 71904159aa6877c2e8d8bf03efac9b824716cfc0 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 31 Jan 2026 20:52:30 +0900
+Subject: [PATCH] =?UTF-8?q?feat:=20TS=E3=83=87=E3=83=9E=E3=83=AB=E3=83=81?=
+ =?UTF-8?q?=E3=83=97=E3=83=AC=E3=82=AF=E3=82=B5=E3=81=AE=E3=82=B7=E3=83=BC?=
+ =?UTF-8?q?=E3=82=AF=E5=87=A6=E7=90=86=E3=81=AB=E8=A9=B3=E7=B4=B0=E3=81=AA?=
+ =?UTF-8?q?=E3=83=AD=E3=82=B0=E3=82=92=E8=BF=BD=E5=8A=A0=E3=81=97=E3=80=81?=
+ =?UTF-8?q?=E3=83=87=E3=83=90=E3=83=83=E3=82=B0=E3=82=92=E5=AE=B9=E6=98=93?=
+ =?UTF-8?q?=E3=81=AB=E3=81=99=E3=82=8B?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ modules/demux/mpeg/ts.c | 50 +++++++++++++++++++++++++++++++++++------
+ 1 file changed, 43 insertions(+), 7 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 642947e346..55c47f3926 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -966,18 +966,24 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+     case DEMUX_SET_POSITION:
+         f = va_arg( args, double );
+         b_bool = (bool) va_arg( args, int ); /* precise */
++        msg_Info( p_demux, "DEMUX_SET_POSITION: pos=%f, precise=%d", f, b_bool );
+
+         if(!p_sys->b_canseek)
++        {
++            msg_Info( p_demux, "DEMUX_SET_POSITION: can't seek (b_canseek=false)" );
+             break;
++        }
+
+         if( p_sys->b_access_control &&
+            !p_sys->b_ignore_time_for_positions && b_bool && p_pmt )
+         {
+             time_t i_time, i_length = 0;
+             vlc_tick_t i_seektime = VLC_TICK_0 + vlc_tick_from_sec( i_length * f );
++            msg_Info( p_demux, "DEMUX_SET_POSITION: trying EIT-based seek to %"PRId64, i_seektime );
+             if( !EITCurrentEventTime( p_pmt, p_sys, &i_time, &i_length ) &&
+                  i_length > 0 && !SeekToTime( p_demux, p_pmt, i_seektime ) )
+             {
++                msg_Info( p_demux, "DEMUX_SET_POSITION: EIT-based seek successful" );
+                 ReadyQueuesPostSeek( p_demux );
+                 es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME, i_seektime );
+                 return VLC_SUCCESS;
+@@ -991,10 +997,12 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         {
+             vlc_tick_t i_length = p_pmt->i_last_dts - p_pmt->pcr.i_first;
+             i64 = p_pmt->pcr.i_first + i_length * f;
++            msg_Info( p_demux, "DEMUX_SET_POSITION: trying time-based seek to %"PRId64" (length %"PRId64")", i64, i_length );
+             if( i64 <= p_pmt->i_last_dts )
+             {
+                 if( !SeekToTime( p_demux, p_pmt, i64 ) )
+                 {
++                    msg_Info( p_demux, "DEMUX_SET_POSITION: time-based seek successful" );
+                     ReadyQueuesPostSeek( p_demux );
+                     es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME, i64 );
+                     return VLC_SUCCESS;
+@@ -1002,6 +1010,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+             }
+         }
+
++        msg_Info( p_demux, "DEMUX_SET_POSITION: falling back to byte-based seek" );
+         if( vlc_stream_GetSize( p_sys->stream, &u64 ) == VLC_SUCCESS &&
+             vlc_stream_Seek( p_sys->stream, (uint64_t)(u64 * f) ) == VLC_SUCCESS )
+         {
+@@ -1013,14 +1022,25 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+     case DEMUX_SET_TIME:
+     {
+         vlc_tick_t i_time = va_arg( args, vlc_tick_t );
++        msg_Info( p_demux, "DEMUX_SET_TIME: time=%"PRId64, i_time );
+
+-        if( p_sys->b_canseek && p_pmt && p_pmt->pcr.i_first != VLC_TICK_INVALID &&
+-           !SeekToTime( p_demux, p_pmt, p_pmt->pcr.i_first + i_time ) )
++        if( p_sys->b_canseek && p_pmt && p_pmt->pcr.i_first != VLC_TICK_INVALID )
+         {
+-            ReadyQueuesPostSeek( p_demux );
+-            es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME,
+-                            p_pmt->pcr.i_first + i_time - VLC_TICK_0 );
+-            return VLC_SUCCESS;
++            msg_Info( p_demux, "DEMUX_SET_TIME: trying time-based seek to %"PRId64, p_pmt->pcr.i_first + i_time );
++            if( !SeekToTime( p_demux, p_pmt, p_pmt->pcr.i_first + i_time ) )
++            {
++                msg_Info( p_demux, "DEMUX_SET_TIME: time-based seek successful" );
++                ReadyQueuesPostSeek( p_demux );
++                es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME,
++                                p_pmt->pcr.i_first + i_time - VLC_TICK_0 );
++                return VLC_SUCCESS;
++            }
++            msg_Info( p_demux, "DEMUX_SET_TIME: time-based seek failed" );
++        }
++        else
++        {
++            msg_Info( p_demux, "DEMUX_SET_TIME: time-based seek not possible (canseek=%d, pcr_first=%"PRId64")",
++                      p_sys->b_canseek, p_pmt ? p_pmt->pcr.i_first : -1 );
+         }
+         break;
+     }
+@@ -1969,17 +1989,27 @@ static void ReadyQueuesPostSeek( demux_t *p_demux )
+ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_seektime )
+ {
+     demux_sys_t *p_sys = p_demux->p_sys;
++    msg_Info( p_demux, "SeekToTime: target=%"PRId64, i_seektime );
+
+     /* Deal with common but worst binary search case */
+     if( p_pmt->pcr.i_first == i_seektime && p_sys->b_canseek )
++    {
++        msg_Info( p_demux, "SeekToTime: seeking to start (0)" );
+         return vlc_stream_Seek( p_sys->stream, 0 );
++    }
+
+     uint64_t i_stream_size;
+     if( vlc_stream_GetSize( p_sys->stream, &i_stream_size ) != VLC_SUCCESS )
+-      return VLC_EGENERIC;
++    {
++        msg_Info( p_demux, "SeekToTime: failed to get stream size" );
++        return VLC_EGENERIC;
++    }
+
+     if( !p_sys->b_canfastseek || i_stream_size < p_sys->i_packet_size )
++    {
++        msg_Info( p_demux, "SeekToTime: can't fast seek (b_canfastseek=%d, size=%"PRIu64, p_sys->b_canfastseek, i_stream_size );
+         return VLC_EGENERIC;
++    }
+
+     const uint64_t i_initial_pos = vlc_stream_Tell( p_sys->stream );
+
+@@ -1989,6 +2019,8 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_see
+     if( i_head_pos >= i_tail_pos )
+         return VLC_EGENERIC;
+
++    msg_Info( p_demux, "SeekToTime: binary search start: head=0, tail=%"PRIu64, i_tail_pos );
++
+     bool b_found = false;
+     while( (i_head_pos + p_sys->i_packet_size) <= i_tail_pos && !b_found )
+     {
+@@ -1998,7 +2030,10 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_see
+         i_splitpos -= i_div;
+
+         if ( vlc_stream_Seek( p_sys->stream, i_splitpos ) != VLC_SUCCESS )
++        {
++            msg_Info( p_demux, "SeekToTime: seek to %"PRIu64" failed", i_splitpos );
+             break;
++        }
+
+         uint64_t i_pos = i_splitpos;
+         while( i_pos < i_tail_pos )
+@@ -2042,6 +2077,7 @@ static int SeekToTime( demux_t *p_demux, const ts_pmt_t *p_pmt, vlc_tick_t i_see
+             if( i_pktpcr != TS_90KHZ_INVALID )
+             {
+                 vlc_tick_t i_diff = i_seektime - TimeStampWrapAround( p_pmt->pcr.i_first, FROM_SCALE(i_pktpcr) );
++                msg_Info( p_demux, "SeekToTime: found PCR/DTS at %"PRIu64": diff=%"PRId64, i_splitpos, i_diff );
+                 if ( i_diff < 0 )
+                     i_tail_pos = (i_splitpos >= p_sys->i_packet_size) ? i_splitpos - p_sys->i_packet_size : 0;
+                 else if( i_diff < VLC_TICK_FROM_MS(500) )
+--
+2.39.1
+
