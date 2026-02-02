@@ -1,0 +1,26 @@
+From 87385fd3de36d9b30ce2ad8a9825ea71bf910d36 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 2 Feb 2026 21:02:59 +0900
+Subject: [PATCH] demux/mpeg: Remove a blocker on DEMUX_GET_POSITION
+
+---
+ modules/demux/mpeg/ts.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 55c47f3926..ac098e8c0c 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -1082,8 +1082,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+             }
+         }
+ 
+-        if( !p_sys->b_ignore_time_for_positions &&
+-            p_pmt &&
++        if( p_pmt &&
+            ( p_pmt->pcr.i_first != VLC_TICK_INVALID || p_pmt->pcr.i_first_dts != VLC_TICK_INVALID ) &&
+              p_pmt->i_last_dts != VLC_TICK_INVALID )
+         {
+-- 
+2.39.1
+
