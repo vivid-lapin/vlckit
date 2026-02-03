@@ -1,0 +1,25 @@
+From 807c66808cab9ea7798fccc4b961008a3ff299a9 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 31 Jan 2026 01:56:52 +0900
+Subject: [PATCH] demux/mpeg: Enable probe boundaries on non-fastseek
+
+---
+ modules/demux/mpeg/ts_psi.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index fdf198e224..17c909fd44 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -2227,7 +2227,7 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+     UpdatePESFilters( p_demux, p_sys->seltype == PROGRAM_ALL );
+
+     /* Probe Boundaries */
+-    if( p_sys->b_canfastseek && !p_pmt->b_last_dts_probed )
++    if( p_sys->b_canseek && !p_pmt->b_last_dts_probed )
+     {
+         ProbeStart( p_demux, p_pmt->i_number );
+         ProbeEnd( p_demux, p_pmt->i_number );
+--
+2.39.1
+
