@@ -1,4 +1,4 @@
-From 4cece42f5c9a150b1b15a042baf3b31f3532c0c4 Mon Sep 17 00:00:00 2001
+From dbd0111574eb16b44575f5a59301b8bf62333c33 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 5 Feb 2026 02:03:29 +0900
 Subject: [PATCH] =?UTF-8?q?fix:=20TS=E3=83=87=E3=83=9E=E3=83=AB=E3=83=81?=
@@ -17,13 +17,13 @@ Content-Transfer-Encoding: 8bit
  1 file changed, 21 insertions(+), 1 deletion(-)
 
 diff --git a/src/player/timer.c b/src/player/timer.c
-index 7448ac1b65..897e5fb29c 100644
+index 7448ac1b65..9bd010f446 100644
 --- a/src/player/timer.c
 +++ b/src/player/timer.c
 @@ -364,7 +364,27 @@ vlc_player_UpdateTimerSource(vlc_player_t *player,
      else
          source->point.system_date = system_date;
- 
+
 -    if (source->point.length != VLC_TICK_INVALID && !source->point.live)
 +    struct vlc_player_input *input = player->input;
 +    bool trust_demux_pos = false;
@@ -32,8 +32,8 @@ index 7448ac1b65..897e5fb29c 100644
 +    {
 +        input_thread_private_t *priv = input_priv(input->thread);
 +        if (priv->master && priv->master->p_demux &&
-+            priv->master->p_demux->psz_demux &&
-+            strcmp(priv->master->p_demux->psz_demux, "ts") == 0)
++            priv->master->p_demux->psz_name &&
++            strcmp(priv->master->p_demux->psz_name, "ts") == 0)
 +        {
 +            bool stream_can_fastseek = false;
 +            if (priv->master->p_demux->s)
@@ -49,6 +49,6 @@ index 7448ac1b65..897e5fb29c 100644
          source->point.position = (ts - player->timer.input_normal_time - player->timer.start_offset)
                                 / (double) source->point.length;
      else
--- 
+--
 2.39.1
 
