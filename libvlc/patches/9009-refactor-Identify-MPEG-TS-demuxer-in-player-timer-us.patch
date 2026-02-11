@@ -1,0 +1,69 @@
+From 66a24443659853f35cf591803eabd6a4c6df4ca1 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Wed, 11 Feb 2026 13:17:04 +0900
+Subject: [PATCH] refactor: Identify MPEG-TS demuxer in player timer using a
+ new `is-mpegts` variable instead of `psz_name` string comparison.
+
+---
+ modules/demux/mpeg/ts.c |  5 +++++
+ src/player/timer.c      | 25 ++++++++-----------------
+ 2 files changed, 13 insertions(+), 17 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 48e6a9bd48..872a20f9f6 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -501,6 +501,11 @@ static int Open( vlc_object_t *p_this )
+     p_sys->b_canfastseek = false;
+     p_sys->b_lowdelay = var_InheritBool( p_demux, "low-delay" );
+     p_sys->b_ignore_time_for_positions = var_InheritBool( p_demux, "ts-seek-percent" );
++
++    /* Identify this demuxer as MPEG-TS for the player timer */
++    var_Create( p_demux, "is-mpegts", VLC_VAR_BOOL );
++    var_SetBool( p_demux, "is-mpegts", true );
++
+     p_sys->b_cc_check = var_InheritBool( p_demux, "ts-cc-check" );
+ 
+     p_sys->standard = TS_STANDARD_AUTO;
+diff --git a/src/player/timer.c b/src/player/timer.c
+index 5751bf10dd..c75df16e2e 100644
+--- a/src/player/timer.c
++++ b/src/player/timer.c
+@@ -373,26 +373,17 @@ vlc_player_UpdateTimerSource(vlc_player_t *player,
+         if (priv->master && priv->master->p_demux)
+         {
+             demux_t *p_demux = priv->master->p_demux;
+-            if (p_demux->psz_name)
++            /* TSデマクサがセットした識別フラグを確認 */
++            if (var_GetBool(p_demux, "is-mpegts"))
+             {
+-                if (strcmp(p_demux->psz_name, "ts") == 0)
+-                {
+-                    bool stream_can_fastseek = false;
+-                    if (p_demux->s)
+-                        vlc_stream_Control(p_demux->s, STREAM_CAN_FASTSEEK, &stream_can_fastseek);
++                bool stream_can_fastseek = false;
++                if (p_demux->s)
++                    vlc_stream_Control(p_demux->s, STREAM_CAN_FASTSEEK, &stream_can_fastseek);
+ 
+-                    msg_Info(player, "TIMER: mpegts detected. stream_can_fastseek: %d", stream_can_fastseek);
+-                    if (!stream_can_fastseek)
+-                        trust_demux_pos = true;
+-                }
+-                else
+-                {
+-                    /* psz_name が異なる場合の確認用ログ */
+-                    msg_Info(player, "TIMER: demuxer is not ts, but: %s", p_demux->psz_name);
+-                }
++                msg_Dbg(player, "TIMER: is-mpegts detected. stream_can_fastseek: %d", stream_can_fastseek);
++                if (!stream_can_fastseek)
++                    trust_demux_pos = true;
+             }
+-            else
+-                msg_Info(player, "TIMER: p_demux->psz_name is NULL");
+         }
+         else
+             msg_Info(player, "TIMER: priv->master or p_demux is NULL");
+-- 
+2.39.1
+
