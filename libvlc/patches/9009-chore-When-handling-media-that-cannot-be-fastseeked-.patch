@@ -1,0 +1,63 @@
+From f808b8a5d78799920067258688d6235379c86289 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Thu, 5 Feb 2026 02:03:29 +0900
+Subject: [PATCH] chore: When handling media that cannot be fastseeked in
+ MPEG-TS, have disabled the use of PCR for position calc
+
+---
+ modules/demux/mpeg/ts.c |  4 ++++
+ src/player/timer.c      | 23 ++++++++++++++++++++++-
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 48e6a9bd48..8671086922 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -503,6 +503,10 @@ static int Open( vlc_object_t *p_this )
+     p_sys->b_ignore_time_for_positions = var_InheritBool( p_demux, "ts-seek-percent" );
+     p_sys->b_cc_check = var_InheritBool( p_demux, "ts-cc-check" );
+ 
++    /* Identify this demuxer as MPEG-TS for the player timer */
++    var_Create(p_demux, "is-mpegts", VLC_VAR_BOOL);
++    var_SetBool(p_demux, "is-mpegts", true);
++
+     p_sys->standard = TS_STANDARD_AUTO;
+     char *psz_standard = var_InheritString( p_demux, "ts-standard" );
+     if( psz_standard )
+diff --git a/src/player/timer.c b/src/player/timer.c
+index 7448ac1b65..6f09a2d45d 100644
+--- a/src/player/timer.c
++++ b/src/player/timer.c
+@@ -364,7 +364,28 @@ vlc_player_UpdateTimerSource(vlc_player_t *player,
+     else
+         source->point.system_date = system_date;
+ 
+-    if (source->point.length != VLC_TICK_INVALID && !source->point.live)
++    struct vlc_player_input *input = player->input;
++    bool trust_demux_pos = false;
++
++    if (input && input->thread)
++    {
++        input_thread_private_t *priv = input_priv(input->thread);
++        if (priv->master && priv->master->p_demux)
++        {
++            demux_t *p_demux = priv->master->p_demux;
++            if (var_GetBool(p_demux, "is-mpegts"))
++            {
++                bool stream_can_fastseek = false;
++                if (p_demux->s)
++                    vlc_stream_Control(p_demux->s, STREAM_CAN_FASTSEEK, &stream_can_fastseek);
++
++                if (!stream_can_fastseek)
++                    trust_demux_pos = true;
++            }
++        }
++    }
++
++    if (!trust_demux_pos && source->point.length != VLC_TICK_INVALID && !source->point.live)
+         source->point.position = (ts - player->timer.input_normal_time - player->timer.start_offset)
+                                / (double) source->point.length;
+     else
+-- 
+2.39.1
+
