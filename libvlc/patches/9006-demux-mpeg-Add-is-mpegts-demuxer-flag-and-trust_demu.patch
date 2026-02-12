@@ -1,0 +1,127 @@
+From 0084f3e0b9f790420433e8b9071be564059fefc5 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 13 Feb 2026 00:39:21 +0900
+Subject: [PATCH] demux/mpeg: Add `is-mpegts` demuxer flag and
+ `trust_demux_pos` to refine position calc
+
+---
+ modules/demux/mpeg/ts.c | 13 ++++++++++---
+ src/player/player.h     |  3 +++
+ src/player/timer.c      | 35 ++++++++++++++++++++++++++++++++++-
+ 3 files changed, 47 insertions(+), 4 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 642947e346..e63ad9f421 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -503,6 +503,10 @@ static int Open( vlc_object_t *p_this )
+     p_sys->b_ignore_time_for_positions = var_InheritBool( p_demux, "ts-seek-percent" );
+     p_sys->b_cc_check = var_InheritBool( p_demux, "ts-cc-check" );
+ 
++    /* p_demuxにMPEG-TSであることを埋め込む */
++    var_Create(p_demux, "is-mpegts", VLC_VAR_BOOL);
++    var_SetBool(p_demux, "is-mpegts", true);
++
+     p_sys->standard = TS_STANDARD_AUTO;
+     char *psz_standard = var_InheritString( p_demux, "ts-standard" );
+     if( psz_standard )
+@@ -940,6 +944,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         }
+ 
+         if( !p_sys->b_ignore_time_for_positions &&
++             // PCRを用いた現在位置計算はcanfastseek(ローカルファイル)時のみ
++             p_sys->b_canfastseek &&
+              p_pmt &&
+              p_pmt->pcr.i_first != VLC_TICK_INVALID &&
+              p_pmt->i_last_dts != VLC_TICK_INVALID &&
+@@ -1014,7 +1020,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+     {
+         vlc_tick_t i_time = va_arg( args, vlc_tick_t );
+ 
+-        if( p_sys->b_canseek && p_pmt && p_pmt->pcr.i_first != VLC_TICK_INVALID &&
++        // 時間指定移動はcanfastseek(ローカルファイル)時以外はSET_POSITIONにフォールバックさせる
++        if( p_sys->b_canfastseek && p_pmt && p_pmt->pcr.i_first != VLC_TICK_INVALID &&
+            !SeekToTime( p_demux, p_pmt, p_pmt->pcr.i_first + i_time ) )
+         {
+             ReadyQueuesPostSeek( p_demux );
+@@ -1062,8 +1069,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+             }
+         }
+ 
+-        if( !p_sys->b_ignore_time_for_positions &&
+-            p_pmt &&
++        // ts-seek-percentが有効でも長さは取らせる
++        if( p_pmt &&
+            ( p_pmt->pcr.i_first != VLC_TICK_INVALID || p_pmt->pcr.i_first_dts != VLC_TICK_INVALID ) &&
+              p_pmt->i_last_dts != VLC_TICK_INVALID )
+         {
+diff --git a/src/player/player.h b/src/player/player.h
+index 8df05b287a..83382450b9 100644
+--- a/src/player/player.h
++++ b/src/player/player.h
+@@ -228,6 +228,9 @@ struct vlc_player_timer
+     vlc_tick_t start_offset;
+     double input_position;
+ 
++    /* -1: unknown, 0: false, 1: true */
++    int trust_demux_pos;
++
+     vlc_tick_t seek_ts;
+     double seek_position;
+     bool paused;
+diff --git a/src/player/timer.c b/src/player/timer.c
+index 7448ac1b65..5d4c1c3819 100644
+--- a/src/player/timer.c
++++ b/src/player/timer.c
+@@ -40,6 +40,7 @@ vlc_player_ResetTimer(vlc_player_t *player)
+     player->timer.smpte_source.smpte.last_framenum = ULONG_MAX;
+     player->timer.seek_ts = VLC_TICK_INVALID;
+     player->timer.seek_position = -1;
++    player->timer.trust_demux_pos = -1;
+     player->timer.paused = false;
+     player->timer.stopping = false;
+ 
+@@ -364,7 +365,39 @@ vlc_player_UpdateTimerSource(vlc_player_t *player,
+     else
+         source->point.system_date = system_date;
+ 
+-    if (source->point.length != VLC_TICK_INVALID && !source->point.live)
++    struct vlc_player_input *input = player->input;
++    bool trust_demux_pos = false;
++
++    if (player->timer.trust_demux_pos != -1)
++    {
++        trust_demux_pos = (player->timer.trust_demux_pos == 1);
++    }
++    else
++    {
++        int trust_status = 0;
++        if (input && input->thread)
++        {
++            input_thread_private_t *priv = input_priv(input->thread);
++            if (priv->master && priv->master->p_demux)
++            {
++                demux_t *p_demux = priv->master->p_demux;
++                if (var_GetBool(p_demux, "is-mpegts"))
++                {
++                  bool stream_can_fastseek = false;
++                  if (p_demux->s)
++                    vlc_stream_Control(p_demux->s, STREAM_CAN_FASTSEEK, &stream_can_fastseek);
++
++                  msg_Dbg(player, "TIMER: MPEG-TS detected via is-mpegts. stream_can_fastseek: %d", stream_can_fastseek);
++                  if (!stream_can_fastseek)
++                    trust_status = 1;
++                }
++            }
++        }
++        player->timer.trust_demux_pos = trust_status;
++        trust_demux_pos = (trust_status == 1);
++    }
++
++    if (!trust_demux_pos && source->point.length != VLC_TICK_INVALID && !source->point.live)
+         source->point.position = (ts - player->timer.input_normal_time - player->timer.start_offset)
+                                / (double) source->point.length;
+     else
+-- 
+2.39.1
+
