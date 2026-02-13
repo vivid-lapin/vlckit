@@ -1,0 +1,122 @@
+From 8efa4bdb4a19b4bcaf03d4d9faf64dbfd465f64e Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 14 Feb 2026 03:20:15 +0900
+Subject: [PATCH] chore: Add arib focused patch
+
+---
+ extras/package/apple/build.conf |  2 +-
+ modules/demux/mpeg/ts_si.c      | 14 ++++++++----
+ src/input/es_out.c              | 38 +++++++++++++++++++++++++++------
+ 3 files changed, 43 insertions(+), 11 deletions(-)
+
+diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
+index 92b1474832..2d3cbc4f14 100644
+--- a/extras/package/apple/build.conf
++++ b/extras/package/apple/build.conf
+@@ -62,7 +62,7 @@ export VLC_CONTRIB_OPTIONS_BASE=(
+     --disable-gnutls
+     --disable-lua
+     --disable-luac
+-    --disable-aribb24
++    --enable-aribb24
+     --disable-aribb25
+     --enable-vpx
+     --enable-libdsm
+diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
+index 6a23825d59..cbe2aff0c6 100644
+--- a/modules/demux/mpeg/ts_si.c
++++ b/modules/demux/mpeg/ts_si.c
+@@ -278,6 +278,11 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
+                     if( pD->i_service_type >= 0x01 && pD->i_service_type <= 0x10 )
+                         psz_type = ppsz_type[pD->i_service_type];
+                 }
++                if (p_sys->standard == TS_STANDARD_ARIB)
++                {
++                    vlc_meta_SetPublisher(p_meta, str1);
++                    vlc_meta_SetArtist(p_meta, str2);
++                }
+                 free( str1 );
+                 free( str2 );
+             }
+@@ -398,8 +403,9 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+            DVB TOT should include DTS offset in descriptor 0x58 (including DST),
+            but as there's no DST in JAPAN (since Showa 27/1952)
+            and considering that no-one seems to send TDT or desc 0x58,
+-           falling back on fixed offset is safe */
+-        p_sys->i_network_time += 9 * 3600;
++           falling back on fixed offset is safe.
++           JST is UTC+9, so we subtract 9 hours to get UTC. */
++        p_sys->i_network_time -= 9 * 3600;
+     }
+ 
+     /* Because libdvbpsi is broken and deduplicating timestamp tables,
+@@ -540,8 +546,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+         /* We have to fix ARIB-B10 as all timestamps are JST */
+         if( p_sys->standard == TS_STANDARD_ARIB )
+         {
+-            /* See comments on TDT callback */
+-            i_start += 9 * 3600;
++            /* See comments on TDT callback. JST is UTC+9. */
++            i_start -= 9 * 3600;
+         }
+ 
+         msg_Dbg( p_demux, "  * event id=%"PRIu16" start_time:%"PRId64" duration=%d "
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index d341adac71..437a529711 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -2107,19 +2107,45 @@ static void EsOutMeta(es_out_sys_t *p_sys, const vlc_meta_t *p_meta, const vlc_m
+         vlc_meta_Merge( p_item->p_meta, p_meta );
+     vlc_mutex_unlock( &p_item->lock );
+ 
+-    /* Check program meta to not override GROUP_META values */
+-    if( p_meta && (!p_program_meta || vlc_meta_Get( p_program_meta, vlc_meta_Title ) == NULL) &&
+-         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL )
+-        input_item_SetName( p_item, vlc_meta_Get( p_meta, vlc_meta_Title ) );
+-
++    const char *psz_title = NULL;
++    const char *psz_artist = NULL;
++    const char *psz_nowplaying = NULL;
++    const char *psz_publisher = NULL;
+     const char *psz_arturl = NULL;
+-    char *psz_alloc = NULL;
+ 
+     if( p_program_meta )
++    {
++        psz_title = vlc_meta_Get( p_program_meta, vlc_meta_Title );
++        psz_artist = vlc_meta_Get( p_program_meta, vlc_meta_Artist );
++        psz_nowplaying = vlc_meta_Get( p_program_meta, vlc_meta_ESNowPlaying );
++        psz_publisher = vlc_meta_Get( p_program_meta, vlc_meta_Publisher );
+         psz_arturl = vlc_meta_Get( p_program_meta, vlc_meta_ArtworkURL );
++    }
++
++    if( psz_title == NULL && p_meta )
++        psz_title = vlc_meta_Get( p_meta, vlc_meta_Title );
++    if( psz_artist == NULL && p_meta )
++        psz_artist = vlc_meta_Get( p_meta, vlc_meta_Artist );
++    if( psz_nowplaying == NULL && p_meta )
++        psz_nowplaying = vlc_meta_Get( p_meta, vlc_meta_NowPlaying );
++    if( psz_publisher == NULL && p_meta )
++        psz_publisher = vlc_meta_Get( p_meta, vlc_meta_Publisher );
+     if( psz_arturl == NULL && p_meta )
+         psz_arturl = vlc_meta_Get( p_meta, vlc_meta_ArtworkURL );
+ 
++    if( psz_title != NULL )
++        input_item_SetName( p_item, psz_title );
++
++    if( psz_artist != NULL )
++        input_item_SetMeta( p_item, vlc_meta_Artist, psz_artist );
++
++    if( psz_nowplaying != NULL )
++        input_item_SetMeta( p_item, vlc_meta_NowPlaying, psz_nowplaying );
++
++    if( psz_publisher != NULL )
++        input_item_SetPublisher( p_item, psz_publisher );
++
++    char *psz_alloc = NULL;
+     if( psz_arturl == NULL ) /* restore/favor previously set item art URL */
+         psz_arturl = psz_alloc = input_item_GetArtURL( p_item );
+ 
+-- 
+2.39.1
+
