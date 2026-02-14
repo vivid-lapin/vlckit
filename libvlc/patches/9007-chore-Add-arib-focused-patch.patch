@@ -1,32 +1,209 @@
-From 8efa4bdb4a19b4bcaf03d4d9faf64dbfd465f64e Mon Sep 17 00:00:00 2001
+From 6c3b0bd850cdc2f80b976e185f5b9e8794f4b08b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 14 Feb 2026 03:20:15 +0900
 Subject: [PATCH] chore: Add arib focused patch
 
 ---
- extras/package/apple/build.conf |  2 +-
- modules/demux/mpeg/ts_si.c      | 14 ++++++++----
- src/input/es_out.c              | 38 +++++++++++++++++++++++++++------
- 3 files changed, 43 insertions(+), 11 deletions(-)
+ modules/demux/mpeg/ts_arib.c | 151 +++++++++++++++++++++++++++++++++++
+ modules/demux/mpeg/ts_arib.h |   2 +
+ modules/demux/mpeg/ts_si.c   |  19 +++--
+ src/input/es_out.c           |  38 +++++++--
+ 4 files changed, 199 insertions(+), 11 deletions(-)
 
-diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
-index 92b1474832..2d3cbc4f14 100644
---- a/extras/package/apple/build.conf
-+++ b/extras/package/apple/build.conf
-@@ -62,7 +62,7 @@ export VLC_CONTRIB_OPTIONS_BASE=(
-     --disable-gnutls
-     --disable-lua
-     --disable-luac
--    --disable-aribb24
-+    --enable-aribb24
-     --disable-aribb25
-     --enable-vpx
-     --enable-libdsm
+diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
+index 1190a9193f..c6d12aadd5 100644
+--- a/modules/demux/mpeg/ts_arib.c
++++ b/modules/demux/mpeg/ts_arib.c
+@@ -22,6 +22,7 @@
+
+ #include <vlc_common.h>
+ #include <vlc_demux.h>
++#include <vlc_charset.h>
+
+ #include "timestamps.h"
+ #include "ts_pid.h"
+@@ -208,3 +209,153 @@ ts_arib_logo_dr_t * ts_arib_logo_dr_Decode( const uint8_t *p_data, size_t i_data
+     ts_arib_logo_dr_Delete( p_dr );
+     return NULL;
+ }
++
++typedef struct
++{
++    uint8_t g[4];
++    uint8_t gl, gr;
++    uint8_t ss;
++} arib_state_t;
++
++static void arib_state_init( arib_state_t *s )
++{
++    s->g[0] = 'B'; // Kanji (JIS X 0208)
++    s->g[1] = 'J'; // Alphanumeric
++    s->g[2] = 'I'; // Katakana
++    s->g[3] = '0'; // Hiragana
++    s->gl = 0;
++    s->gr = 2;
++    s->ss = 0;
++}
++
++static size_t write_utf8( char *p_out, uint32_t i_code )
++{
++    if( i_code <= 0x7F )
++    {
++        p_out[0] = i_code;
++        return 1;
++    }
++    else if( i_code <= 0x7FF )
++    {
++        p_out[0] = 0xC0 | (i_code >> 6);
++        p_out[1] = 0x80 | (i_code & 0x3F);
++        return 2;
++    }
++    else if( i_code <= 0xFFFF )
++    {
++        p_out[0] = 0xE0 | (i_code >> 12);
++        p_out[1] = 0x80 | ((i_code >> 6) & 0x3F);
++        p_out[2] = 0x80 | (i_code & 0x3F);
++        return 3;
++    }
++    else if( i_code <= 0x10FFFF )
++    {
++        p_out[0] = 0xF0 | (i_code >> 18);
++        p_out[1] = 0x80 | ((i_code >> 12) & 0x3F);
++        p_out[2] = 0x80 | ((i_code >> 6) & 0x3F);
++        p_out[3] = 0x80 | (i_code & 0x3F);
++        return 4;
++    }
++    return 0;
++}
++
++char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
++{
++    if( i_data == 0 ) return NULL;
++
++    arib_state_t s;
++    arib_state_init( &s );
++
++    char *p_out = malloc( i_data * 4 + 1 );
++    if( !p_out ) return NULL;
++    char *p_dst = p_out;
++
++    for( size_t i = 0; i < i_data; )
++    {
++        uint8_t c = p_data[i];
++        if( c == 0x1B ) // ESC
++        {
++            if( i + 2 < i_data )
++            {
++                if( p_data[i+1] == 0x24 ) // Designate 2-byte set
++                {
++                    if( p_data[i+2] >= 0x28 && p_data[i+2] <= 0x2B ) // G0-G3
++                    {
++                        if( i + 3 < i_data ) {
++                            s.g[p_data[i+2] - 0x28] = p_data[i+3];
++                            i += 4; continue;
++                        }
++                    }
++                    else {
++                        s.g[0] = p_data[i+2]; // Assume G0
++                        i += 3; continue;
++                    }
++                }
++                else if( p_data[i+1] >= 0x28 && p_data[i+1] <= 0x2B ) // Designate 1-byte set
++                {
++                    s.g[p_data[i+1] - 0x28] = p_data[i+2];
++                    i += 3; continue;
++                }
++            }
++        }
++
++        if( c == 0x0F ) { s.gl = 0; i++; continue; } // LS0
++        if( c == 0x0E ) { s.gl = 1; i++; continue; } // LS1
++        if( c == 0x19 ) { s.ss = 2; i++; continue; } // SS2
++        if( c == 0x1D ) { s.ss = 3; i++; continue; } // SS3
++        if( c == 0x8E ) { s.ss = 2; i++; continue; } // SS2 (8-bit)
++        if( s.ss == 0 && c == 0x8F ) { s.ss = 3; i++; continue; } // SS3 (8-bit)
++
++        uint8_t set_idx = (s.ss != 0) ? (s.ss) : (c < 0x80 ? s.gl : s.gr);
++        uint8_t set = s.g[set_idx];
++        s.ss = 0; // Reset single shift
++
++        if( c < 0x20 || (c >= 0x7F && c < 0xA0) )
++        {
++            if( c == 0x0A ) *p_dst++ = '\n';
++            else if( c == 0x20 ) *p_dst++ = ' ';
++            i++; continue;
++        }
++
++        uint16_t code = (c & 0x7F);
++        bool b_2byte = (set == 'B' || set == 'M' || set == 'n' || set == 'p' || set == '<'); // Kanji, JIS X 0213, etc.
++
++        if( b_2byte && i + 1 < i_data )
++        {
++            code = (code << 8) | (p_data[i+1] & 0x7F);
++            i += 2;
++        }
++        else i++;
++
++        if( set == 'B' ) // Kanji
++        {
++            uint8_t euc[3] = { (code >> 8) | 0x80, (code & 0xFF) | 0x80, 0 };
++            char *utf8 = FromCharset( "EUC-JP", euc, 2 );
++            if( utf8 ) {
++                size_t len = strlen(utf8);
++                memcpy( p_dst, utf8, len );
++                p_dst += len;
++                free( utf8 );
++            }
++        }
++        else if( set == 'J' || set == 'B' /* alphanumeric */ )
++        {
++            *p_dst++ = (code & 0x7F);
++        }
++        else if( set == 'I' ) // Katakana
++        {
++            p_dst += write_utf8( p_dst, 0xFF61 + (code - 0x21) );
++        }
++        else if( set == '0' ) // Hiragana
++        {
++            p_dst += write_utf8( p_dst, 0x3041 + (code - 0x21) );
++        }
++        else if( set == '<' ) // Additional Symbols
++        {
++            *p_dst++ = '?';
++        }
++    }
++
++    *p_dst = '\0';
++    return p_out;
++}
+diff --git a/modules/demux/mpeg/ts_arib.h b/modules/demux/mpeg/ts_arib.h
+index 26502496a7..a74ecc6656 100644
+--- a/modules/demux/mpeg/ts_arib.h
++++ b/modules/demux/mpeg/ts_arib.h
+@@ -51,4 +51,6 @@ void ts_arib_logo_dr_Delete( ts_arib_logo_dr_t * );
+ bool ts_arib_inject_png_palette( const uint8_t *p_in, size_t i_in,
+                                  uint8_t **pp_out, size_t *pi_out );
+
++char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data );
++
+ #endif
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index 6a23825d59..cbe2aff0c6 100644
+index 6a23825d59..e985756eca 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
-@@ -278,6 +278,11 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
+@@ -118,7 +118,10 @@ static char *EITConvertToUTF8( demux_t *p_demux,
+         return psz_outstring;
+     }
+ #else
+-    VLC_UNUSED(p_sys);
++    if( p_sys->standard == TS_STANDARD_ARIB )
++    {
++        return ts_arib_Decode_B24( psz_instring, i_length );
++    }
+ #endif
+     /* Deal with no longer broken providers (no switch byte
+       but sending ISO_8859-1 instead of ISO_6937) without
+@@ -278,6 +281,11 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
                      if( pD->i_service_type >= 0x01 && pD->i_service_type <= 0x10 )
                          psz_type = ppsz_type[pD->i_service_type];
                  }
@@ -38,7 +215,7 @@ index 6a23825d59..cbe2aff0c6 100644
                  free( str1 );
                  free( str2 );
              }
-@@ -398,8 +403,9 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+@@ -398,8 +406,9 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
             DVB TOT should include DTS offset in descriptor 0x58 (including DST),
             but as there's no DST in JAPAN (since Showa 27/1952)
             and considering that no-one seems to send TDT or desc 0x58,
@@ -48,9 +225,9 @@ index 6a23825d59..cbe2aff0c6 100644
 +           JST is UTC+9, so we subtract 9 hours to get UTC. */
 +        p_sys->i_network_time -= 9 * 3600;
      }
- 
+
      /* Because libdvbpsi is broken and deduplicating timestamp tables,
-@@ -540,8 +546,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -540,8 +549,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
          /* We have to fix ARIB-B10 as all timestamps are JST */
          if( p_sys->standard == TS_STANDARD_ARIB )
          {
@@ -59,7 +236,7 @@ index 6a23825d59..cbe2aff0c6 100644
 +            /* See comments on TDT callback. JST is UTC+9. */
 +            i_start -= 9 * 3600;
          }
- 
+
          msg_Dbg( p_demux, "  * event id=%"PRIu16" start_time:%"PRId64" duration=%d "
 diff --git a/src/input/es_out.c b/src/input/es_out.c
 index d341adac71..437a529711 100644
@@ -68,7 +245,7 @@ index d341adac71..437a529711 100644
 @@ -2107,19 +2107,45 @@ static void EsOutMeta(es_out_sys_t *p_sys, const vlc_meta_t *p_meta, const vlc_m
          vlc_meta_Merge( p_item->p_meta, p_meta );
      vlc_mutex_unlock( &p_item->lock );
- 
+
 -    /* Check program meta to not override GROUP_META values */
 -    if( p_meta && (!p_program_meta || vlc_meta_Get( p_program_meta, vlc_meta_Title ) == NULL) &&
 -         vlc_meta_Get( p_meta, vlc_meta_Title ) != NULL )
@@ -80,7 +257,7 @@ index d341adac71..437a529711 100644
 +    const char *psz_publisher = NULL;
      const char *psz_arturl = NULL;
 -    char *psz_alloc = NULL;
- 
+
      if( p_program_meta )
 +    {
 +        psz_title = vlc_meta_Get( p_program_meta, vlc_meta_Title );
@@ -100,7 +277,7 @@ index d341adac71..437a529711 100644
 +        psz_publisher = vlc_meta_Get( p_meta, vlc_meta_Publisher );
      if( psz_arturl == NULL && p_meta )
          psz_arturl = vlc_meta_Get( p_meta, vlc_meta_ArtworkURL );
- 
+
 +    if( psz_title != NULL )
 +        input_item_SetName( p_item, psz_title );
 +
@@ -116,7 +293,7 @@ index d341adac71..437a529711 100644
 +    char *psz_alloc = NULL;
      if( psz_arturl == NULL ) /* restore/favor previously set item art URL */
          psz_arturl = psz_alloc = input_item_GetArtURL( p_item );
- 
--- 
+
+--
 2.39.1
 
