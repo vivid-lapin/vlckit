@@ -1,7 +1,7 @@
 From 6c3b0bd850cdc2f80b976e185f5b9e8794f4b08b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 14 Feb 2026 03:20:15 +0900
-Subject: [PATCH] chore: Add arib focused patch
+Subject: [PATCH 1/2] chore: Add arib focused patch
 
 ---
  modules/demux/mpeg/ts_arib.c | 151 +++++++++++++++++++++++++++++++++++

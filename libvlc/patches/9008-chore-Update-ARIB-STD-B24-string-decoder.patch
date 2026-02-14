@@ -1,0 +1,289 @@
+From 4cd3949af9db2fc45b7f2b6ab3ba3294a26ef414 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 14 Feb 2026 12:58:10 +0900
+Subject: [PATCH 2/2] chore: Update ARIB-STD-B24 string decoder
+
+---
+ modules/demux/mpeg/ts_arib.c | 212 +++++++++++++++++++++++++----------
+ 1 file changed, 151 insertions(+), 61 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
+index c6d12aadd5..3a3daa8ed8 100644
+--- a/modules/demux/mpeg/ts_arib.c
++++ b/modules/demux/mpeg/ts_arib.c
+@@ -210,22 +210,73 @@ ts_arib_logo_dr_t * ts_arib_logo_dr_Decode( const uint8_t *p_data, size_t i_data
+     return NULL;
+ }
+
++/*****************************************************************************
++ * ARIB STD-B24 Decoder implementation
++ *****************************************************************************/
++
+ typedef struct
+ {
+     uint8_t g[4];
++    bool b_2byte[4];
+     uint8_t gl, gr;
+     uint8_t ss;
+ } arib_state_t;
+
+-static void arib_state_init( arib_state_t *s )
++static void arib_apply_macro( arib_state_t *s, uint8_t m )
+ {
+-    s->g[0] = 'B'; // Kanji (JIS X 0208)
+-    s->g[1] = 'J'; // Alphanumeric
+-    s->g[2] = 'I'; // Katakana
+-    s->g[3] = '0'; // Hiragana
+     s->gl = 0;
+-    s->gr = 2;
+-    s->ss = 0;
++    switch( m )
++    {
++        case 0x70: // Macro 0: G0=Kanji, G1=Alnum, G2=Katakana, G3=Hiragana. GL=G0, GR=G2.
++            s->g[0] = 0x42; s->b_2byte[0] = true;
++            s->g[1] = 0x4A; s->b_2byte[1] = false;
++            s->g[2] = 0x31; s->b_2byte[2] = false;
++            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->gr = 2;
++            break;
++        case 0x71: // Macro 1: GL=G0, GR=G3.
++            s->g[0] = 0x42; s->b_2byte[0] = true;
++            s->g[1] = 0x4A; s->b_2byte[1] = false;
++            s->g[2] = 0x31; s->b_2byte[2] = false;
++            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->gr = 3;
++            break;
++        case 0x72: // Macro 2: GL=G0, GR=G1.
++            s->g[0] = 0x42; s->b_2byte[0] = true;
++            s->g[1] = 0x4A; s->b_2byte[1] = false;
++            s->g[2] = 0x31; s->b_2byte[2] = false;
++            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->gr = 1;
++            break;
++        case 0x73: // Macro 3: Mosaics.
++            s->g[0] = 0x32; s->b_2byte[0] = false;
++            s->g[1] = 0x33; s->b_2byte[1] = false;
++            s->g[2] = 0x34; s->b_2byte[2] = false;
++            s->g[3] = 0x35; s->b_2byte[3] = false;
++            s->gr = 2;
++            break;
++        case 0x7E: // Macro 14: G0=Katakana, G1=Hiragana, G2=Alnum, G3=Kanji. GL=G0, GR=G2.
++            s->g[0] = 0x31; s->b_2byte[0] = false;
++            s->g[1] = 0x30; s->b_2byte[1] = false;
++            s->g[2] = 0x4A; s->b_2byte[2] = false;
++            s->g[3] = 0x42; s->b_2byte[3] = true;
++            s->gr = 2;
++            break;
++        case 0x7F: // Macro 15: G0=Alnum, G1=Katakana, G2=Hiragana, G3=Kanji. GL=G0, GR=G2.
++            s->g[0] = 0x4A; s->b_2byte[0] = false;
++            s->g[1] = 0x31; s->b_2byte[1] = false;
++            s->g[2] = 0x30; s->b_2byte[2] = false;
++            s->g[3] = 0x42; s->b_2byte[3] = true;
++            s->gr = 2;
++            break;
++        default:
++            s->g[0] = 0x42; s->b_2byte[0] = true;
++            s->g[1] = 0x4A; s->b_2byte[1] = false;
++            s->g[2] = 0x31; s->b_2byte[2] = false;
++            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->gr = 2;
++            break;
++    }
+ }
+
+ static size_t write_utf8( char *p_out, uint32_t i_code )
+@@ -259,12 +310,37 @@ static size_t write_utf8( char *p_out, uint32_t i_code )
+     return 0;
+ }
+
++static uint32_t arib_decode_additional_symbol( uint16_t code )
++{
++    uint8_t row = (code >> 8);
++    uint8_t cell = (code & 0xFF);
++    if( row == 0x24 ) {
++        // [字][双][二][多][解][手][新][再][終] (STD-B24 Table 7-10)
++        if( cell >= 0x29 && cell <= 0x2E ) return 0x1F210 + (cell - 0x29);
++        if( cell >= 0x3F && cell <= 0x41 ) return 0x1F216 + (cell - 0x3F);
++    } else if ( row == 0x22 ) { // Roman Numerals
++        if ( cell >= 0x21 && cell <= 0x2A ) return 0x2160 + (cell - 0x21); // I-X
++        if ( cell >= 0x2B && cell <= 0x34 ) return 0x2170 + (cell - 0x2B); // i-x
++    } else if ( row == 0x23 ) { // Circled Numbers
++        if ( cell >= 0x21 && cell <= 0x34 ) return 0x2460 + (cell - 0x21); // (1)-(20)
++    } else if ( row == 0x25 ) { // Squared Latin Letters
++        switch( cell ) {
++            case 0x21: return 0x1F14A; // [HV]
++            case 0x22: return 0x1F14B; // [SD]
++            case 0x23: return 0x1F14C; // [P]
++            case 0x24: return 0x1F14D; // [W]
++            case 0x25: return 0x1F14E; // [MV]
++        }
++    }
++    return 0;
++}
++
+ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+ {
+     if( i_data == 0 ) return NULL;
+
+     arib_state_t s;
+-    arib_state_init( &s );
++    arib_apply_macro( &s, 0x70 ); // SI default
+
+     char *p_out = malloc( i_data * 4 + 1 );
+     if( !p_out ) return NULL;
+@@ -273,62 +349,82 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+     for( size_t i = 0; i < i_data; )
+     {
+         uint8_t c = p_data[i];
+-        if( c == 0x1B ) // ESC
+-        {
+-            if( i + 2 < i_data )
+-            {
+-                if( p_data[i+1] == 0x24 ) // Designate 2-byte set
+-                {
+-                    if( p_data[i+2] >= 0x28 && p_data[i+2] <= 0x2B ) // G0-G3
+-                    {
+-                        if( i + 3 < i_data ) {
+-                            s.g[p_data[i+2] - 0x28] = p_data[i+3];
+-                            i += 4; continue;
++
++        /* ISO-2022 ESC sequences & shifts */
++        if( c == 0x1B ) {
++            if( i + 1 < i_data ) {
++                uint8_t n = p_data[i+1];
++                if( n >= 0x6E && n <= 0x7E ) { // Locking shifts
++                    if( n == 0x6E ) s.gl = 2; // LS2
++                    else if( n == 0x6F ) s.gl = 3; // LS3
++                    else if( n == 0x7E ) s.gr = 1; // LS1R
++                    else if( n == 0x7D ) s.gr = 2; // LS2R
++                    else if( n == 0x7C ) s.gr = 3; // LS3R
++                    i += 2; continue;
++                }
++                if( n == 0x24 ) { // Designate 2-byte set
++                    if( i + 2 < i_data ) {
++                        uint8_t n2 = p_data[i+2];
++                        if( n2 >= 0x28 && n2 <= 0x2B ) {
++                            if( i + 3 < i_data ) {
++                                s.g[n2 - 0x28] = p_data[i+3];
++                                s.b_2byte[n2 - 0x28] = true;
++                                i += 4; continue;
++                            }
++                        } else {
++                            s.g[0] = n2; s.b_2byte[0] = true;
++                            i += 3; continue;
+                         }
+                     }
+-                    else {
+-                        s.g[0] = p_data[i+2]; // Assume G0
++                } else if( n >= 0x28 && n <= 0x2B ) { // Designate 1-byte set
++                    if( i + 2 < i_data ) {
++                        s.g[n - 0x28] = p_data[i+2];
++                        s.b_2byte[n - 0x28] = false;
+                         i += 3; continue;
+                     }
+                 }
+-                else if( p_data[i+1] >= 0x28 && p_data[i+1] <= 0x2B ) // Designate 1-byte set
+-                {
+-                    s.g[p_data[i+1] - 0x28] = p_data[i+2];
+-                    i += 3; continue;
+-                }
+             }
+         }
+-
++
+         if( c == 0x0F ) { s.gl = 0; i++; continue; } // LS0
+         if( c == 0x0E ) { s.gl = 1; i++; continue; } // LS1
+-        if( c == 0x19 ) { s.ss = 2; i++; continue; } // SS2
+-        if( c == 0x1D ) { s.ss = 3; i++; continue; } // SS3
+-        if( c == 0x8E ) { s.ss = 2; i++; continue; } // SS2 (8-bit)
+-        if( s.ss == 0 && c == 0x8F ) { s.ss = 3; i++; continue; } // SS3 (8-bit)
+-
+-        uint8_t set_idx = (s.ss != 0) ? (s.ss) : (c < 0x80 ? s.gl : s.gr);
+-        uint8_t set = s.g[set_idx];
+-        s.ss = 0; // Reset single shift
++        if( c >= 0x70 && c <= 0x7F ) { arib_apply_macro( &s, c ); i++; continue; }
++
++        /* C1 codes / SS2 / SS3 / CSI */
++        if( c >= 0x80 && c <= 0x9F ) {
++            if( c == 0x8E ) s.ss = 2; // SS2
++            else if( c == 0x8F ) s.ss = 3; // SS3
++            else if( c == 0x9B ) { // CSI
++                i++;
++                while( i < i_data && (p_data[i] < 0x40 || p_data[i] > 0x7E) ) i++;
++            }
++            i++; continue;
++        }
+
+-        if( c < 0x20 || (c >= 0x7F && c < 0xA0) )
+-        {
+-            if( c == 0x0A ) *p_dst++ = '\n';
+-            else if( c == 0x20 ) *p_dst++ = ' ';
++        /* Other C0 codes / SS2 / SS3 / DEL */
++        if( c < 0x20 || c == 0x7F ) {
++            if( c == 0x19 ) s.ss = 2; // SS2 (7-bit)
++            else if( c == 0x1D ) s.ss = 3; // SS3 (7-bit)
++            else if( c == 0x0D || c == 0x0A ) *p_dst++ = '\n'; // APR / APD
+             i++; continue;
+         }
++
++        if( c == 0x20 ) { *p_dst++ = ' '; i++; continue; }
++
++        /* Character invocation */
++        uint8_t set_idx = (s.ss != 0) ? (s.ss) : (c < 0x80 ? s.gl : s.gr);
++        uint8_t set = s.g[set_idx];
++        bool b_2byte = s.b_2byte[set_idx];
++        s.ss = 0;
+
+         uint16_t code = (c & 0x7F);
+-        bool b_2byte = (set == 'B' || set == 'M' || set == 'n' || set == 'p' || set == '<'); // Kanji, JIS X 0213, etc.
+-
+-        if( b_2byte && i + 1 < i_data )
+-        {
++        if( b_2byte && i + 1 < i_data ) {
+             code = (code << 8) | (p_data[i+1] & 0x7F);
+             i += 2;
+-        }
+-        else i++;
++        } else i++;
+
+-        if( set == 'B' ) // Kanji
+-        {
++        /* Decode */
++        if( set == 0x42 ) { // Kanji (JIS X 0208)
+             uint8_t euc[3] = { (code >> 8) | 0x80, (code & 0xFF) | 0x80, 0 };
+             char *utf8 = FromCharset( "EUC-JP", euc, 2 );
+             if( utf8 ) {
+@@ -337,22 +433,16 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+                 p_dst += len;
+                 free( utf8 );
+             }
+-        }
+-        else if( set == 'J' || set == 'B' /* alphanumeric */ )
+-        {
++        } else if( set == 0x4A || set == 0x37 ) { // Alphanumeric / Prop. Alnum
+             *p_dst++ = (code & 0x7F);
+-        }
+-        else if( set == 'I' ) // Katakana
+-        {
+-            p_dst += write_utf8( p_dst, 0xFF61 + (code - 0x21) );
+-        }
+-        else if( set == '0' ) // Hiragana
+-        {
++        } else if( set == 0x31 || set == 0x39 ) { // Katakana / Prop. Katakana
++            p_dst += write_utf8( p_dst, 0x30A1 + (code - 0x21) );
++        } else if( set == 0x30 || set == 0x38 ) { // Hiragana / Prop. Hiragana
+             p_dst += write_utf8( p_dst, 0x3041 + (code - 0x21) );
+-        }
+-        else if( set == '<' ) // Additional Symbols
+-        {
+-            *p_dst++ = '?';
++        } else if( set == 0x3C ) { // Additional Symbols
++            uint32_t sym = arib_decode_additional_symbol( code );
++            if( sym ) p_dst += write_utf8( p_dst, sym );
++            else *p_dst++ = '?';
+         }
+     }
+
+--
+2.39.1
+
