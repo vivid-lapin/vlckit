@@ -1,14 +1,14 @@
-From b9b7851d9ed2bab9c42ddedd4abace2768b7cb4f Mon Sep 17 00:00:00 2001
+From faafd79b60819815deee24ed74010683b9e9f94e Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 14 Feb 2026 22:14:21 +0900
-Subject: [PATCH 3/3] demux/mpeg: Add ARIB-STD-B24 string decoder
+Subject: [PATCH 1/2] demux/mpeg: Add ARIB-STD-B24 string decoder
 
 ---
  modules/demux/mpeg/arib_tables.h | 840 +++++++++++++++++++++++++++++++
- modules/demux/mpeg/ts_arib.c     | 445 ++++++++++++++++
+ modules/demux/mpeg/ts_arib.c     | 448 +++++++++++++++++
  modules/demux/mpeg/ts_arib.h     |   2 +
  modules/demux/mpeg/ts_si.c       |   5 +-
- 4 files changed, 1291 insertions(+), 1 deletion(-)
+ 4 files changed, 1294 insertions(+), 1 deletion(-)
  create mode 100644 modules/demux/mpeg/arib_tables.h
 
 diff --git a/modules/demux/mpeg/arib_tables.h b/modules/demux/mpeg/arib_tables.h
@@ -858,10 +858,10 @@ index 0000000000..d47df353d5
 +};
 +static const size_t arib_gaiji_map_count = 531;
 diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
-index 1190a9193f..6fccbf0c42 100644
+index 1190a9193f..3f4f221262 100644
 --- a/modules/demux/mpeg/ts_arib.c
 +++ b/modules/demux/mpeg/ts_arib.c
-@@ -208,3 +208,448 @@ ts_arib_logo_dr_t * ts_arib_logo_dr_Decode( const uint8_t *p_data, size_t i_data
+@@ -208,3 +208,451 @@ ts_arib_logo_dr_t * ts_arib_logo_dr_Decode( const uint8_t *p_data, size_t i_data
      ts_arib_logo_dr_Delete( p_dr );
      return NULL;
  }
@@ -959,6 +959,82 @@ index 1190a9193f..6fccbf0c42 100644
 +    res[1] = (b2 + cell) & 0xFF;
 +}
 +
++static void ts_arib_process_gl( arib_parser_t *p_ctx, uint8_t c,
++                                const uint8_t *p_in, size_t i_in, size_t *pi,
++                                struct vlc_memstream *p_stream,
++                                uint8_t **pp_sjis, size_t *pi_sjis, size_t *pi_sjis_alloc,
++                                bool b_graphic_normal )
++{
++    uint8_t set_idx = p_ctx->graphic_l;
++    if( p_ctx->graphic_mode[set_idx] != MODE_GRAPHIC )
++    {
++        /* Invalid mode for GL, skip char(s) */
++        if( p_ctx->graphic_byte[set_idx] == 2 && *pi < i_in ) (*pi)++;
++    }
++    else
++    {
++        uint8_t cs = p_ctx->graphic[set_idx];
++
++        if( p_ctx->graphic_byte[set_idx] == 2 )
++        {
++             /* 2-byte GL */
++             uint8_t c2 = (*pi < i_in) ? p_in[(*pi)++] : 0;
++             if( !c2 ) return;
++
++             /* Kanji / Gaiji Handling */
++             uint16_t code = (c << 8) | c2;
++
++             arib_map_str_t *p_map = bsearch( &code, arib_gaiji_map, arib_gaiji_map_count,
++                                              sizeof(arib_map_str_t), cmp_u16_str );
++             if( p_map )
++             {
++                 arib_flush( p_stream, pp_sjis, pi_sjis );
++                 vlc_memstream_puts( p_stream, p_map->val );
++             }
++             else
++             {
++                 uint8_t sjis[2];
++                 get_sjis_kanji( c, c2, sjis );
++                 arib_buf_append( pp_sjis, pi_sjis, pi_sjis_alloc, sjis[0], sjis[1] );
++             }
++        }
++        else
++        {
++            /* 1-byte GL */
++            const arib_map_sjis_t *p_el = NULL;
++            uint8_t val[2] = {0};
++
++            if( cs == CS_ASCII || cs == CS_PROP_ASCII || cs == CS_JIS_X0201_KATAKANA )
++            {
++                if( b_graphic_normal )
++                     p_el = bsearch( &c, arib_ascii_map, arib_ascii_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
++                else
++                     val[0] = c;
++            }
++            else if( cs == CS_HIRAGANA || cs == CS_PROP_HIRAGANA )
++            {
++                p_el = bsearch( &c, arib_hiragana_map, arib_hiragana_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
++            }
++            else if( cs == CS_KATAKANA || cs == CS_PROP_KATAKANA )
++            {
++                p_el = bsearch( &c, arib_katakana_map, arib_katakana_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
++            }
++
++            if( p_el )
++            {
++                val[0] = p_el->val[0];
++                val[1] = p_el->val[1];
++            }
++            else if( !val[0] && b_graphic_normal && cs == CS_ASCII )
++            {
++                val[0] = c;
++            }
++
++            arib_buf_append( pp_sjis, pi_sjis, pi_sjis_alloc, val[0], val[1] );
++        }
++    }
++}
++
 +char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
 +{
 +    if( !p_in || !i_in ) return NULL;
@@ -1020,8 +1096,8 @@ index 1190a9193f..6fccbf0c42 100644
 +                        if ( next_c > 0x20 && next_c <= 0x7E )
 +                        {
 +                            i++;
-+                            c = next_c;
-+                            goto process_gl;
++                            ts_arib_process_gl( &ctx, next_c, p_in, i_in, &i, &stream,
++                                                &p_sjis, &i_sjis, &i_sjis_alloc, b_graphic_normal );
 +                        }
 +                    }
 +                    ctx.graphic_l = saved_l;
@@ -1041,8 +1117,8 @@ index 1190a9193f..6fccbf0c42 100644
 +                        if ( next_c > 0x20 && next_c <= 0x7E )
 +                        {
 +                            i++;
-+                            c = next_c;
-+                            goto process_gl;
++                            ts_arib_process_gl( &ctx, next_c, p_in, i_in, &i, &stream,
++                                                &p_sjis, &i_sjis, &i_sjis_alloc, b_graphic_normal );
 +                        }
 +                    }
 +                    ctx.graphic_l = saved_l;
@@ -1121,81 +1197,8 @@ index 1190a9193f..6fccbf0c42 100644
 +        }
 +        else if( c <= 0x7E ) /* GL */
 +        {
-+process_gl: /* Label for SS2/SS3 goto */
-+            {
-+                uint8_t set_idx = ctx.graphic_l;
-+                if( ctx.graphic_mode[set_idx] != MODE_GRAPHIC )
-+                {
-+                    /* Invalid mode for GL, skip char(s) */
-+                    if( ctx.graphic_byte[set_idx] == 2 && i < i_in ) i++;
-+                }
-+                else
-+                {
-+                    uint8_t cs = ctx.graphic[set_idx];
-+
-+                    if( ctx.graphic_byte[set_idx] == 2 )
-+                    {
-+                         /* 2-byte GL */
-+                         uint8_t c2 = (i < i_in) ? p_in[i++] : 0;
-+                         if( !c2 ) break;
-+
-+                         /* Kanji / Gaiji Handling */
-+                         /* Check Gaiji range (JIS Row-Cell) */
-+                         uint16_t code = (c << 8) | c2;
-+
-+                         /* Check ARIB Gaiji Map */
-+                         arib_map_str_t *p_map = bsearch( &code, arib_gaiji_map, arib_gaiji_map_count,
-+                                                          sizeof(arib_map_str_t), cmp_u16_str );
-+                         if( p_map )
-+                         {
-+                             arib_flush( &stream, &p_sjis, &i_sjis );
-+                             vlc_memstream_puts( &stream, p_map->val );
-+                         }
-+                         else
-+                         {
-+                             uint8_t sjis[2];
-+                             get_sjis_kanji( c, c2, sjis );
-+                             arib_buf_append( &p_sjis, &i_sjis, &i_sjis_alloc, sjis[0], sjis[1] );
-+                         }
-+                    }
-+                    else
-+                    {
-+                        /* 1-byte GL */
-+                        /* Lookup in tables based on CS */
-+                        const arib_map_sjis_t *p_el = NULL;
-+                        uint8_t val[2] = {0};
-+
-+                        if( cs == CS_ASCII || cs == CS_PROP_ASCII || cs == CS_JIS_X0201_KATAKANA )
-+                        {
-+                            if( b_graphic_normal )
-+                                 p_el = bsearch( &c, arib_ascii_map, arib_ascii_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
-+                            else
-+                                 val[0] = c; /* Just ASCII 1-byte? Or mapped? */
-+                        }
-+                        else if( cs == CS_HIRAGANA || cs == CS_PROP_HIRAGANA )
-+                        {
-+                            p_el = bsearch( &c, arib_hiragana_map, arib_hiragana_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
-+                        }
-+                        else if( cs == CS_KATAKANA || cs == CS_PROP_KATAKANA )
-+                        {
-+                            p_el = bsearch( &c, arib_katakana_map, arib_katakana_map_count, sizeof(arib_map_sjis_t), cmp_u8_sjis );
-+                        }
-+
-+                        if( p_el )
-+                        {
-+                            val[0] = p_el->val[0];
-+                            val[1] = p_el->val[1];
-+                        }
-+                        else if( !val[0] && b_graphic_normal && cs == CS_ASCII )
-+                        {
-+                            /* Fallback to normal ascii if not in map (map has 0x21+) */
-+                            val[0] = c;
-+                        }
-+
-+                        arib_buf_append( &p_sjis, &i_sjis, &i_sjis_alloc, val[0], val[1] );
-+                    }
-+                }
-+            }
++            ts_arib_process_gl( &ctx, c, p_in, i_in, &i, &stream,
++                                &p_sjis, &i_sjis, &i_sjis_alloc, b_graphic_normal );
 +        }
 +        else if( c <= 0xA0 ) /* C1 */
 +        {
@@ -1317,12 +1320,12 @@ index 26502496a7..0a859adbec 100644
 @@ -51,4 +51,6 @@ void ts_arib_logo_dr_Delete( ts_arib_logo_dr_t * );
  bool ts_arib_inject_png_palette( const uint8_t *p_in, size_t i_in,
                                   uint8_t **pp_out, size_t *pi_out );
- 
+
 +char * ts_arib_Decode( const uint8_t *p_in, size_t i_in );
 +
  #endif
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index 6ac84d6d04..7b7ae929e9 100644
+index 1c9d365089..4f31fc7fe1 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
 @@ -118,7 +118,10 @@ static char *EITConvertToUTF8( demux_t *p_demux,
@@ -1337,6 +1340,6 @@ index 6ac84d6d04..7b7ae929e9 100644
  #endif
      /* Deal with no longer broken providers (no switch byte
        but sending ISO_8859-1 instead of ISO_6937) without
--- 
+--
 2.39.1
 
