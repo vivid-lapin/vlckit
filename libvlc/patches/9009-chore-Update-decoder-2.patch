@@ -1,0 +1,290 @@
+From 46a463c76b4b9668a72fbbd5d3683b7677d23ddd Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 14 Feb 2026 17:41:53 +0900
+Subject: [PATCH 1/2] chore: Update decoder 2
+
+---
+ modules/demux/mpeg/ts_arib.c | 187 ++++++++++++++++++++---------------
+ 1 file changed, 108 insertions(+), 79 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
+index 3a3daa8ed8..ccce49ced3 100644
+--- a/modules/demux/mpeg/ts_arib.c
++++ b/modules/demux/mpeg/ts_arib.c
+@@ -98,7 +98,7 @@ static const unsigned char CLUT_to_chunks[] = {
+     /* size + tRNS */
+     0x00, 0x00, 0x00, 0x80, 0x74, 0x52, 0x4e, 0x53,
+ 
+-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* 0-63 */
++    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, /* 0-62 */
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+@@ -227,53 +227,32 @@ static void arib_apply_macro( arib_state_t *s, uint8_t m )
+     s->gl = 0;
+     switch( m )
+     {
+-        case 0x70: // Macro 0: G0=Kanji, G1=Alnum, G2=Katakana, G3=Hiragana. GL=G0, GR=G2.
++        case 0x70: // Macro 0: G0=Kanji, G1=Alnum, G2=Hiragana, G3=Macro. GL=G0, GR=G2.
+             s->g[0] = 0x42; s->b_2byte[0] = true;
+             s->g[1] = 0x4A; s->b_2byte[1] = false;
+-            s->g[2] = 0x31; s->b_2byte[2] = false;
+-            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->g[2] = 0x30; s->b_2byte[2] = false;
++            s->g[3] = 0x70; s->b_2byte[3] = false;
+             s->gr = 2;
+             break;
+-        case 0x71: // Macro 1: GL=G0, GR=G3.
+-            s->g[0] = 0x42; s->b_2byte[0] = true;
+-            s->g[1] = 0x4A; s->b_2byte[1] = false;
+-            s->g[2] = 0x31; s->b_2byte[2] = false;
+-            s->g[3] = 0x30; s->b_2byte[3] = false;
+-            s->gr = 3;
+-            break;
+-        case 0x72: // Macro 2: GL=G0, GR=G1.
++        case 0x71: // Macro 1: GL=G0, GR=G2. G1=Katakana.
+             s->g[0] = 0x42; s->b_2byte[0] = true;
+-            s->g[1] = 0x4A; s->b_2byte[1] = false;
+-            s->g[2] = 0x31; s->b_2byte[2] = false;
+-            s->g[3] = 0x30; s->b_2byte[3] = false;
+-            s->gr = 1;
+-            break;
+-        case 0x73: // Macro 3: Mosaics.
+-            s->g[0] = 0x32; s->b_2byte[0] = false;
+-            s->g[1] = 0x33; s->b_2byte[1] = false;
+-            s->g[2] = 0x34; s->b_2byte[2] = false;
+-            s->g[3] = 0x35; s->b_2byte[3] = false;
+-            s->gr = 2;
+-            break;
+-        case 0x7E: // Macro 14: G0=Katakana, G1=Hiragana, G2=Alnum, G3=Kanji. GL=G0, GR=G2.
+-            s->g[0] = 0x31; s->b_2byte[0] = false;
+-            s->g[1] = 0x30; s->b_2byte[1] = false;
+-            s->g[2] = 0x4A; s->b_2byte[2] = false;
+-            s->g[3] = 0x42; s->b_2byte[3] = true;
++            s->g[1] = 0x31; s->b_2byte[1] = false;
++            s->g[2] = 0x30; s->b_2byte[2] = false;
++            s->g[3] = 0x70; s->b_2byte[3] = false;
+             s->gr = 2;
+             break;
+-        case 0x7F: // Macro 15: G0=Alnum, G1=Katakana, G2=Hiragana, G3=Kanji. GL=G0, GR=G2.
+-            s->g[0] = 0x4A; s->b_2byte[0] = false;
+-            s->g[1] = 0x31; s->b_2byte[1] = false;
++        case 0x72: // Macro 2: G1=DRCS
++            s->g[0] = 0x42; s->b_2byte[0] = true;
++            s->g[1] = 0x41; s->b_2byte[1] = false;
+             s->g[2] = 0x30; s->b_2byte[2] = false;
+-            s->g[3] = 0x42; s->b_2byte[3] = true;
++            s->g[3] = 0x70; s->b_2byte[3] = false;
+             s->gr = 2;
+             break;
+         default:
+             s->g[0] = 0x42; s->b_2byte[0] = true;
+             s->g[1] = 0x4A; s->b_2byte[1] = false;
+-            s->g[2] = 0x31; s->b_2byte[2] = false;
+-            s->g[3] = 0x30; s->b_2byte[3] = false;
++            s->g[2] = 0x30; s->b_2byte[2] = false;
++            s->g[3] = 0x31; s->b_2byte[3] = false;
+             s->gr = 2;
+             break;
+     }
+@@ -283,54 +262,85 @@ static size_t write_utf8( char *p_out, uint32_t i_code )
+ {
+     if( i_code <= 0x7F )
+     {
+-        p_out[0] = i_code;
++        p_out[0] = (char)i_code;
+         return 1;
+     }
+     else if( i_code <= 0x7FF )
+     {
+-        p_out[0] = 0xC0 | (i_code >> 6);
+-        p_out[1] = 0x80 | (i_code & 0x3F);
++        p_out[0] = (char)(0xC0 | (i_code >> 6));
++        p_out[1] = (char)(0x80 | (i_code & 0x3F));
+         return 2;
+     }
+     else if( i_code <= 0xFFFF )
+     {
+-        p_out[0] = 0xE0 | (i_code >> 12);
+-        p_out[1] = 0x80 | ((i_code >> 6) & 0x3F);
+-        p_out[2] = 0x80 | (i_code & 0x3F);
++        p_out[0] = (char)(0xE0 | (i_code >> 12));
++        p_out[1] = (char)(0x80 | ((i_code >> 6) & 0x3F));
++        p_out[2] = (char)(0x80 | (i_code & 0x3F));
+         return 3;
+     }
+     else if( i_code <= 0x10FFFF )
+     {
+-        p_out[0] = 0xF0 | (i_code >> 18);
+-        p_out[1] = 0x80 | ((i_code >> 12) & 0x3F);
+-        p_out[2] = 0x80 | ((i_code >> 6) & 0x3F);
+-        p_out[3] = 0x80 | (i_code & 0x3F);
++        p_out[0] = (char)(0xF0 | (i_code >> 18));
++        p_out[1] = (char)(0x80 | ((i_code >> 12) & 0x3F));
++        p_out[2] = (char)(0x80 | ((i_code >> 6) & 0x3F));
++        p_out[3] = (char)(0x80 | (i_code & 0x3F));
+         return 4;
+     }
+     return 0;
+ }
+ 
+-static uint32_t arib_decode_additional_symbol( uint16_t code )
++static uint32_t arib_get_ucs( uint16_t code )
+ {
+-    uint8_t row = (code >> 8);
+-    uint8_t cell = (code & 0xFF);
+-    if( row == 0x24 ) {
+-        // [字][双][二][多][解][手][新][再][終] (STD-B24 Table 7-10)
+-        if( cell >= 0x29 && cell <= 0x2E ) return 0x1F210 + (cell - 0x29);
+-        if( cell >= 0x3F && cell <= 0x41 ) return 0x1F216 + (cell - 0x3F);
+-    } else if ( row == 0x22 ) { // Roman Numerals
+-        if ( cell >= 0x21 && cell <= 0x2A ) return 0x2160 + (cell - 0x21); // I-X
+-        if ( cell >= 0x2B && cell <= 0x34 ) return 0x2170 + (cell - 0x2B); // i-x
+-    } else if ( row == 0x23 ) { // Circled Numbers
+-        if ( cell >= 0x21 && cell <= 0x34 ) return 0x2460 + (cell - 0x21); // (1)-(20)
+-    } else if ( row == 0x25 ) { // Squared Latin Letters
++    uint8_t row = (uint8_t)(code >> 8);
++    uint8_t cell = (uint8_t)(code & 0xFF);
++
++    if( row == 0x7A ) { // Row 90 (0x7A) - Fascicle 1 Table 7-10/7-19/7-20
+         switch( cell ) {
+-            case 0x21: return 0x1F14A; // [HV]
+-            case 0x22: return 0x1F14B; // [SD]
+-            case 0x23: return 0x1F14C; // [P]
+-            case 0x24: return 0x1F14D; // [W]
+-            case 0x25: return 0x1F14E; // [MV]
++            case 0x50: return 0x1F14A; // [HV]
++            case 0x51: return 0x1F14B; // [SD]
++            case 0x52: return 0x1F13F; // [P]
++            case 0x53: return 0x1F146; // [W]
++            case 0x54: return 0x1F14E; // [MV]
++            case 0x55: return 0x1F210; // [手]
++            case 0x56: return 0x1F211; // [字]
++            case 0x57: return 0x1F212; // [双]
++            case 0x58: return 0x1F213; // [デ]
++            case 0x59: return 0x1F142; // [S]
++            case 0x5A: return 0x1F214; // [二]
++            case 0x5B: return 0x1F215; // [多]
++            case 0x5C: return 0x1F216; // [解]
++            case 0x5D: return 0x1F14D; // [SS]
++            case 0x5E: return 0x1F131; // [B]
++            case 0x5F: return 0x1F13D; // [N]
++            case 0x62: return 0x1F217; // [天]
++            case 0x63: return 0x1F218; // [交]
++            case 0x64: return 0x1F219; // [映]
++            case 0x65: return 0x1F21A; // [無]
++            case 0x66: return 0x1F21B; // [料]
++            case 0x67: return 0x26BF;  // [鍵]
++            case 0x68: return 0x1F21C; // [前]
++            case 0x69: return 0x1F21D; // [後]
++            case 0x6A: return 0x1F21E; // [再]
++            case 0x6B: return 0x1F21F; // [新]
++            case 0x6C: return 0x1F220; // [初]
++            case 0x6D: return 0x1F221; // [終]
++            case 0x6E: return 0x1F222; // [生]
++            case 0x6F: return 0x1F223; // [販]
++            case 0x70: return 0x1F224; // [声]
++            case 0x71: return 0x1F225; // [吹]
++            case 0x72: return 0x1F14F; // [PPV]
++            case 0x73: return 0x3299;  // [秘]
++            case 0x74: return 0x1F200; // [ほか]
+         }
++    } else if ( row == 0x7B ) { // Row 91
++        if ( cell == 0x50 ) return 0x1F14C; // [M]
++    } else if ( row == 0x7D ) { // Row 93
++        if ( cell >= 0x21 && cell <= 0x28 ) return 0x322A + (cell - 0x21); // (月)-(日)
++        if ( cell >= 0x29 && cell <= 0x2C ) return 0x337E - (cell - 0x29); // Meiji-Heisei
++        if ( cell == 0x41 ) return 0x1F243; // [左]
++    } else if ( row == 0x7E ) { // Row 94
++        if ( cell >= 0x21 && cell <= 0x2C ) return 0x2160 + (cell - 0x21); // I-XII
++        if ( cell >= 0x2D && cell <= 0x40 ) return 0x2460 + (cell - 0x2D); // (1)-(20)
+     }
+     return 0;
+ }
+@@ -340,7 +350,7 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+     if( i_data == 0 ) return NULL;
+ 
+     arib_state_t s;
+-    arib_apply_macro( &s, 0x70 ); // SI default
++    arib_apply_macro( &s, 0x70 ); // SI default initialization
+ 
+     char *p_out = malloc( i_data * 4 + 1 );
+     if( !p_out ) return NULL;
+@@ -409,7 +419,7 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+             i++; continue;
+         }
+         
+-        if( c == 0x20 ) { *p_dst++ = ' '; i++; continue; }
++        if( (c & 0x7F) == 0x20 ) { *p_dst++ = ' '; i++; continue; }
+ 
+         /* Character invocation */
+         uint8_t set_idx = (s.ss != 0) ? (s.ss) : (c < 0x80 ? s.gl : s.gr);
+@@ -417,16 +427,19 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+         bool b_2byte = s.b_2byte[set_idx];
+         s.ss = 0;
+ 
+-        uint16_t code = (c & 0x7F);
++        uint16_t code = (uint16_t)(c & 0x7F);
+         if( b_2byte && i + 1 < i_data ) {
+-            code = (code << 8) | (p_data[i+1] & 0x7F);
++            code = (uint16_t)((code << 8) | (p_data[i+1] & 0x7F));
+             i += 2;
+         } else i++;
+ 
+         /* Decode */
+-        if( set == 0x42 ) { // Kanji (JIS X 0208)
+-            uint8_t euc[3] = { (code >> 8) | 0x80, (code & 0xFF) | 0x80, 0 };
+-            char *utf8 = FromCharset( "EUC-JP", euc, 2 );
++        uint32_t sym = arib_get_ucs( code );
++        if( sym ) {
++            p_dst += write_utf8( p_dst, sym );
++        } else if( set == 0x42 || set == 0x39 || set == 0x3A ) { // Kanji / JIS X 0213
++            uint8_t euc[3] = { (uint8_t)((code >> 8) | 0x80), (uint8_t)((code & 0xFF) | 0x80), 0 };
++            char *utf8 = FromCharset( "EUC-JP", (char *)euc, 2 );
+             if( utf8 ) {
+                 size_t len = strlen(utf8);
+                 memcpy( p_dst, utf8, len );
+@@ -434,15 +447,31 @@ char * ts_arib_Decode_B24( const uint8_t *p_data, size_t i_data )
+                 free( utf8 );
+             }
+         } else if( set == 0x4A || set == 0x37 ) { // Alphanumeric / Prop. Alnum
+-            *p_dst++ = (code & 0x7F);
+-        } else if( set == 0x31 || set == 0x39 ) { // Katakana / Prop. Katakana
+-            p_dst += write_utf8( p_dst, 0x30A1 + (code - 0x21) );
+-        } else if( set == 0x30 || set == 0x38 ) { // Hiragana / Prop. Hiragana
+-            p_dst += write_utf8( p_dst, 0x3041 + (code - 0x21) );
+-        } else if( set == 0x3C ) { // Additional Symbols
+-            uint32_t sym = arib_decode_additional_symbol( code );
+-            if( sym ) p_dst += write_utf8( p_dst, sym );
+-            else *p_dst++ = '?';
++            if( code == 0x5C ) p_dst += write_utf8( p_dst, 0x00A5 ); // Yen
++            else if( code == 0x7E ) p_dst += write_utf8( p_dst, 0x203E ); // Overline
++            else *p_dst++ = (char)code;
++        } else if( set == 0x31 || set == 0x39 || set == 0x49 ) { // Katakana
++            if( code >= 0x21 && code <= 0x73 ) p_dst += write_utf8( p_dst, 0x30A1 + (uint32_t)(code - 0x21) );
++            else switch( code ) {
++                case 0x77: p_dst += write_utf8( p_dst, 0x30FC ); break; // ー
++                case 0x78: p_dst += write_utf8( p_dst, 0x3002 ); break; // 。
++                case 0x79: p_dst += write_utf8( p_dst, 0x300C ); break; // 「
++                case 0x7A: p_dst += write_utf8( p_dst, 0x300D ); break; // 」
++                case 0x7B: p_dst += write_utf8( p_dst, 0x3001 ); break; // 、
++                case 0x7C: p_dst += write_utf8( p_dst, 0x30FB ); break; // ・
++            }
++        } else if( set == 0x30 || set == 0x38 ) { // Hiragana
++            if( code >= 0x21 && code <= 0x73 ) p_dst += write_utf8( p_dst, 0x3041 + (uint32_t)(code - 0x21) );
++            else switch( code ) {
++                case 0x77: p_dst += write_utf8( p_dst, 0x30FC ); break; // ー
++                case 0x78: p_dst += write_utf8( p_dst, 0x3002 ); break; // 。
++                case 0x79: p_dst += write_utf8( p_dst, 0x300C ); break; // 「
++                case 0x7A: p_dst += write_utf8( p_dst, 0x300D ); break; // 」
++                case 0x7B: p_dst += write_utf8( p_dst, 0x3001 ); break; // 、
++                case 0x7C: p_dst += write_utf8( p_dst, 0x30FB ); break; // ・
++            }
++        } else if( set == 0x3B ) { // Additional Symbols (not found in helper)
++            *p_dst++ = '?';
+         }
+     }
+ 
+-- 
+2.39.1
+
