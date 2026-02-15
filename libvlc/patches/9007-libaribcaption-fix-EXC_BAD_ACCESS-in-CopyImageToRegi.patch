@@ -1,0 +1,26 @@
+From fd3f5b65c3da30d9022dfde27b40c47d8a3183aa Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 15 Feb 2026 23:28:34 +0900
+Subject: [PATCH] libaribcaption: fix EXC_BAD_ACCESS in CopyImageToRegion
+
+---
+ modules/codec/arib/libaribcaption.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
+index e6d116e35b..d6bf01c2c4 100644
+--- a/modules/codec/arib/libaribcaption.c
++++ b/modules/codec/arib/libaribcaption.c
+@@ -95,6 +95,9 @@ static void CopyImageToRegion(picture_t *dst_pic, const aribcc_image_t *image)
+     if(image->pixel_format != ARIBCC_PIXELFORMAT_RGBA8888)
+         return;
+ 
++    if(image->bitmap == NULL)
++        return;
++
+     plane_t *p_dstplane = &dst_pic->p[0];
+     plane_t srcplane;
+     srcplane.i_lines = image->height;
+-- 
+2.39.1
+
