@@ -1,16 +1,16 @@
-From 4a8aef97ccf0f39ca57eb687414f4c1e2346dc4b Mon Sep 17 00:00:00 2001
+From 04001242a173c5a3f6c3e52e1f9512d94a07d322 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:40:46 +0900
-Subject: [PATCH 2/2] demux/mpeg: Mapping ES program nowPlaying to metadata
+Subject: [PATCH 1/2] demux/mpeg: Mapping ES program nowPlaying to metadata
  title
 
 ---
- modules/demux/mpeg/ts_si.c |  4 +++
- src/input/es_out.c         | 53 +++++++++++++++++++++++++++++++++++---
- 2 files changed, 53 insertions(+), 4 deletions(-)
+ modules/demux/mpeg/ts_si.c |  4 ++++
+ src/input/es_out.c         | 36 ++++++++++++++++++++++++++++++++----
+ 2 files changed, 36 insertions(+), 4 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index 4f31fc7fe1..2d1f2e0310 100644
+index e2ab37d13a..a20b9fe971 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
 @@ -281,6 +281,10 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
@@ -25,7 +25,7 @@ index 4f31fc7fe1..2d1f2e0310 100644
                  free( str2 );
              }
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index d341adac71..32d2492c5d 100644
+index d341adac71..854940c1b3 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
 @@ -1639,12 +1639,30 @@ static void EsOutProgramSelect(es_out_sys_t *p_sys, es_out_pgrm_t *p_pgrm)
@@ -79,28 +79,11 @@ index d341adac71..32d2492c5d 100644
          input_SendEventMeta( p_input );
 
          const char *now_playing_tr =
-@@ -2105,6 +2132,24 @@ static void EsOutMeta(es_out_sys_t *p_sys, const vlc_meta_t *p_meta, const vlc_m
+@@ -2105,6 +2132,7 @@ static void EsOutMeta(es_out_sys_t *p_sys, const vlc_meta_t *p_meta, const vlc_m
      vlc_mutex_lock( &p_item->lock );
      if( p_meta )
          vlc_meta_Merge( p_item->p_meta, p_meta );
 +
-+    if( p_program_meta )
-+    {
-+        const char *psz_nowplaying = vlc_meta_Get( p_program_meta, vlc_meta_ESNowPlaying );
-+        if( psz_nowplaying )
-+        {
-+            msg_Dbg( p_input, "EsOutMeta: Setting Title to %s from ESNowPlaying", psz_nowplaying );
-+            vlc_meta_SetTitle( p_item->p_meta, psz_nowplaying );
-+        }
-+        else
-+        {
-+            msg_Dbg( p_input, "EsOutMeta: ESNowPlaying is NULL in p_program_meta, not setting Title" );
-+        }
-+    }
-+    else
-+    {
-+        msg_Dbg( p_input, "EsOutMeta: p_program_meta is NULL, ignoring" );
-+    }
      vlc_mutex_unlock( &p_item->lock );
 
      /* Check program meta to not override GROUP_META values */

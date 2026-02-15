@@ -1,25 +1,26 @@
-From 6f2b6880a6dfec81df1fb8a20cd8edfe762521c5 Mon Sep 17 00:00:00 2001
+From 679fe100654bba4f30e04a4d4ddf9fdecf21d086 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:49:09 +0900
 Subject: [PATCH] demux/mpeg: Add short description to description metadata
 
 ---
  modules/demux/mpeg/ts_si.c | 15 ++++++++++++++-
- 1 file changed, 14 insertions(+), 1 deletion(-)
+ src/input/es_out.c         | 17 +++++++++++++++++
+ 2 files changed, 31 insertions(+), 1 deletion(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index 2d1f2e0310..a79f449c4e 100644
+index a20b9fe971..dfeb102851 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
-@@ -694,6 +694,7 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
- 
+@@ -693,6 +693,7 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+
      if( p_epg->i_event > 0 )
      {
 +        p_epg->b_present = (p_eit->i_table_id == 0x4e);
          if( p_epg->b_present && p_epg->p_current )
          {
              ts_pat_t *p_pat = ts_pid_Get(&p_sys->pids, 0)->u.p_pat;
-@@ -703,8 +704,20 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -702,8 +703,20 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
                  p_pmt->eit.i_event_start = p_epg->p_current->i_start;
                  p_pmt->eit.i_event_length = p_epg->p_current->i_duration;
              }
@@ -41,6 +42,45 @@ index 2d1f2e0310..a79f449c4e 100644
          es_out_Control( p_demux->out, ES_OUT_SET_GROUP_EPG, p_eit->i_extension, p_epg );
      }
      vlc_epg_Delete( p_epg );
--- 
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index 854940c1b3..b687856a43 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -2041,10 +2041,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+         if( p_tmp->b_present && p_tmp->i_source_id == p_pgrm->i_id )
+         {
+             const char *psz_name = ( p_tmp->p_current ) ? p_tmp->p_current->psz_name : NULL;
++            const char *psz_short_desc = ( p_tmp->p_current ) ? p_tmp->p_current->psz_short_description : NULL;
+             if( !p_pgrm->p_meta )
+                 p_pgrm->p_meta = vlc_meta_New();
+             if( p_pgrm->p_meta )
++            {
+                 vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
++                vlc_meta_Set( p_pgrm->p_meta, vlc_meta_Description, psz_short_desc );
++            }
+             break;
+         }
+     }
+@@ -2066,6 +2070,19 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+         {
+             msg_Dbg( p_input, "EsOutProgramEpg: ESNowPlaying is NULL, not setting Title" );
+         }
++
++        const char *psz_desc = p_pgrm->p_meta ?
++                               vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Description ) : NULL;
++        if( psz_desc )
++        {
++            msg_Dbg( p_input, "EsOutProgramEpg: Setting Description to %s", psz_desc );
++            input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_Description, psz_desc );
++        }
++        else
++        {
++            msg_Dbg( p_input, "EsOutProgramEpg: Description is NULL" );
++        }
++
+         input_SendEventMeta( p_input );
+
+         const char *now_playing_tr =
+--
 2.39.1
 
