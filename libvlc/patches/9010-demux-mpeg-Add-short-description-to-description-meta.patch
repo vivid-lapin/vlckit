@@ -1,12 +1,12 @@
-From 679fe100654bba4f30e04a4d4ddf9fdecf21d086 Mon Sep 17 00:00:00 2001
+From e945aa3e559a496fa3e3fcef54bd3f0edf53a006 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:49:09 +0900
 Subject: [PATCH] demux/mpeg: Add short description to description metadata
 
 ---
  modules/demux/mpeg/ts_si.c | 15 ++++++++++++++-
- src/input/es_out.c         | 17 +++++++++++++++++
- 2 files changed, 31 insertions(+), 1 deletion(-)
+ src/input/es_out.c         | 28 ++++++++++++++++++++++++++--
+ 2 files changed, 40 insertions(+), 3 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
 index a20b9fe971..dfeb102851 100644
@@ -43,10 +43,29 @@ index a20b9fe971..dfeb102851 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index 854940c1b3..b687856a43 100644
+index 854940c1b3..f7ef6125ae 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
-@@ -2041,10 +2041,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -1901,9 +1901,16 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
+              * TODO update scrambled info name ? */
+             free( psz_oldinfokey );
+         }
+-        vlc_meta_Delete( p_pgrm->p_meta );
++        /* Do not delete existing meta, as it may contain EIT info (ESNowPlaying, Description) set by EsOutProgramEpg */
++        /* vlc_meta_Delete( p_pgrm->p_meta ); */
++        msg_Dbg( p_input, "EsOutProgramMeta: p_pgrm->p_meta exists, merging new metadata (keeping EIT info)" );
++    }
++    else
++    {
++        msg_Dbg( p_input, "EsOutProgramMeta: p_pgrm->p_meta is NULL, creating new" );
++        p_pgrm->p_meta = vlc_meta_New();
+     }
+-    p_pgrm->p_meta = vlc_meta_New();
++
+     if( p_pgrm->p_meta )
+         vlc_meta_Merge( p_pgrm->p_meta, p_meta );
+
+@@ -2041,10 +2048,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          if( p_tmp->b_present && p_tmp->i_source_id == p_pgrm->i_id )
          {
              const char *psz_name = ( p_tmp->p_current ) ? p_tmp->p_current->psz_name : NULL;
@@ -61,7 +80,7 @@ index 854940c1b3..b687856a43 100644
              break;
          }
      }
-@@ -2066,6 +2070,19 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2066,6 +2077,19 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          {
              msg_Dbg( p_input, "EsOutProgramEpg: ESNowPlaying is NULL, not setting Title" );
          }
