@@ -1,13 +1,54 @@
-From 8a358c26baec395040860002ed8d75e5ee988e0d Mon Sep 17 00:00:00 2001
+From 950959878ca2c1d92ec0ca8f7bcb8f418650964b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:49:09 +0900
 Subject: [PATCH] demux/mpeg: Add short description to description metadata
 
 ---
+ modules/demux/mpeg/ts.c    |  8 ++++----
  modules/demux/mpeg/ts_si.c | 15 ++++++++++++++-
  src/input/es_out.c         | 35 +++++++++++++++++++++++++++++++++--
- 2 files changed, 47 insertions(+), 3 deletions(-)
+ 3 files changed, 51 insertions(+), 7 deletions(-)
 
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index e63ad9f421..45e3323884 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -933,7 +933,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         pf = va_arg( args, double * );
+
+         /* Access control test is because EPG for recordings is not relevant */
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_time, i_length;
+             if( !EITCurrentEventTime( p_pmt, p_sys, &i_time, &i_length ) && i_length > 0 )
+@@ -976,7 +976,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         if(!p_sys->b_canseek)
+             break;
+
+-        if( p_sys->b_access_control &&
++        if( false && p_sys->b_access_control &&
+            !p_sys->b_ignore_time_for_positions && b_bool && p_pmt )
+         {
+             time_t i_time, i_length = 0;
+@@ -1033,7 +1033,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+     }
+
+     case DEMUX_GET_TIME:
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_event_start;
+             if( !EITCurrentEventTime( p_pmt, p_sys, &i_event_start, NULL ) )
+@@ -1059,7 +1059,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         return VLC_SUCCESS;
+
+     case DEMUX_GET_LENGTH:
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_event_duration;
+             if( !EITCurrentEventTime( p_pmt, p_sys, NULL, &i_event_duration ) )
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
 index a20b9fe971..dfeb102851 100644
 --- a/modules/demux/mpeg/ts_si.c
