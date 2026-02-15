@@ -1,12 +1,12 @@
-From e945aa3e559a496fa3e3fcef54bd3f0edf53a006 Mon Sep 17 00:00:00 2001
+From 8a358c26baec395040860002ed8d75e5ee988e0d Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:49:09 +0900
 Subject: [PATCH] demux/mpeg: Add short description to description metadata
 
 ---
  modules/demux/mpeg/ts_si.c | 15 ++++++++++++++-
- src/input/es_out.c         | 28 ++++++++++++++++++++++++++--
- 2 files changed, 40 insertions(+), 3 deletions(-)
+ src/input/es_out.c         | 35 +++++++++++++++++++++++++++++++++--
+ 2 files changed, 47 insertions(+), 3 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
 index a20b9fe971..dfeb102851 100644
@@ -43,10 +43,29 @@ index a20b9fe971..dfeb102851 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index 854940c1b3..f7ef6125ae 100644
+index 854940c1b3..338f2618b9 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
-@@ -1901,9 +1901,16 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
+@@ -1654,14 +1654,18 @@ static void EsOutProgramSelect(es_out_sys_t *p_sys, es_out_pgrm_t *p_pgrm)
+         {
+              msg_Dbg( p_input, "EsOutProgramSelect: Setting Title to %s from ESNowPlaying", psz_nowplaying );
+              input_item_SetTitle( input_priv(p_input)->p_item, psz_nowplaying );
++             input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_NowPlaying, psz_nowplaying );
+         }
+         else
+         {
+              const char *psz_title = vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Title );
+              msg_Dbg( p_input, "EsOutProgramSelect: ESNowPlaying is NULL, using Title: %s", psz_title ? psz_title : "NULL" );
+              input_item_SetTitle( input_priv(p_input)->p_item, psz_title );
++             input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_NowPlaying, psz_title );
+         }
+
++        /* Force update notification */
++        input_item_SetPreparsed( input_priv(p_input)->p_item );
+         EsOutMeta( p_sys, NULL, p_pgrm->p_meta );
+         input_SendEventMeta( p_input );
+         /* FIXME: we probably want to replace every input meta */
+@@ -1901,9 +1905,16 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
               * TODO update scrambled info name ? */
              free( psz_oldinfokey );
          }
@@ -65,7 +84,7 @@ index 854940c1b3..f7ef6125ae 100644
      if( p_pgrm->p_meta )
          vlc_meta_Merge( p_pgrm->p_meta, p_meta );
 
-@@ -2041,10 +2048,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2041,10 +2052,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          if( p_tmp->b_present && p_tmp->i_source_id == p_pgrm->i_id )
          {
              const char *psz_name = ( p_tmp->p_current ) ? p_tmp->p_current->psz_name : NULL;
@@ -80,7 +99,13 @@ index 854940c1b3..f7ef6125ae 100644
              break;
          }
      }
-@@ -2066,6 +2077,19 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2061,11 +2076,27 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+         {
+             msg_Dbg( p_input, "EsOutProgramEpg: Setting Title to %s from ESNowPlaying", psz_nowplaying );
+             input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_Title, psz_nowplaying );
++            input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_NowPlaying, psz_nowplaying );
+         }
+         else
          {
              msg_Dbg( p_input, "EsOutProgramEpg: ESNowPlaying is NULL, not setting Title" );
          }
@@ -97,6 +122,8 @@ index 854940c1b3..f7ef6125ae 100644
 +            msg_Dbg( p_input, "EsOutProgramEpg: Description is NULL" );
 +        }
 +
++        /* Force update notification even if already parsed */
++        input_item_SetPreparsed( p_item );
          input_SendEventMeta( p_input );
 
          const char *now_playing_tr =
