@@ -1,13 +1,13 @@
-From 950959878ca2c1d92ec0ca8f7bcb8f418650964b Mon Sep 17 00:00:00 2001
+From f23b15c9adee0bb81cec7f8edc37826ca2aa49eb Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 03:49:09 +0900
 Subject: [PATCH] demux/mpeg: Add short description to description metadata
 
 ---
- modules/demux/mpeg/ts.c    |  8 ++++----
- modules/demux/mpeg/ts_si.c | 15 ++++++++++++++-
- src/input/es_out.c         | 35 +++++++++++++++++++++++++++++++++--
- 3 files changed, 51 insertions(+), 7 deletions(-)
+ modules/demux/mpeg/ts.c    |  8 +++----
+ modules/demux/mpeg/ts_si.c | 15 ++++++++++++-
+ src/input/es_out.c         | 43 ++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 59 insertions(+), 7 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
 index e63ad9f421..45e3323884 100644
@@ -84,7 +84,7 @@ index a20b9fe971..dfeb102851 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index 854940c1b3..338f2618b9 100644
+index 854940c1b3..1263ec973b 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
 @@ -1654,14 +1654,18 @@ static void EsOutProgramSelect(es_out_sys_t *p_sys, es_out_pgrm_t *p_pgrm)
@@ -114,13 +114,13 @@ index 854940c1b3..338f2618b9 100644
 +        /* Do not delete existing meta, as it may contain EIT info (ESNowPlaying, Description) set by EsOutProgramEpg */
 +        /* vlc_meta_Delete( p_pgrm->p_meta ); */
 +        msg_Dbg( p_input, "EsOutProgramMeta: p_pgrm->p_meta exists, merging new metadata (keeping EIT info)" );
-+    }
+     }
+-    p_pgrm->p_meta = vlc_meta_New();
 +    else
 +    {
 +        msg_Dbg( p_input, "EsOutProgramMeta: p_pgrm->p_meta is NULL, creating new" );
 +        p_pgrm->p_meta = vlc_meta_New();
-     }
--    p_pgrm->p_meta = vlc_meta_New();
++    }
 +
      if( p_pgrm->p_meta )
          vlc_meta_Merge( p_pgrm->p_meta, p_meta );
@@ -140,7 +140,7 @@ index 854940c1b3..338f2618b9 100644
              break;
          }
      }
-@@ -2061,11 +2076,27 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2061,11 +2076,35 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          {
              msg_Dbg( p_input, "EsOutProgramEpg: Setting Title to %s from ESNowPlaying", psz_nowplaying );
              input_item_SetMeta( input_priv(p_input)->p_item, vlc_meta_Title, psz_nowplaying );
@@ -161,6 +161,14 @@ index 854940c1b3..338f2618b9 100644
 +        else
 +        {
 +            msg_Dbg( p_input, "EsOutProgramEpg: Description is NULL" );
++        }
++
++        /* Also propagate Publisher (service name from SDT) if available */
++        const char *psz_pub = p_pgrm->p_meta ?
++                              vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Publisher ) : NULL;
++        if( psz_pub )
++        {
++            input_item_SetPublisher( input_priv(p_input)->p_item, psz_pub );
 +        }
 +
 +        /* Force update notification even if already parsed */

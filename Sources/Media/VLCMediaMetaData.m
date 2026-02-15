@@ -331,12 +331,12 @@
     libvlc_media_t *media_t = (libvlc_media_t *)_media.libVLCMediaDescriptor;
     if (!media_t)
         return nil;
-    
+
     char **ppsz_names = NULL;
     const unsigned count = libvlc_media_get_meta_extra_names(media_t, &ppsz_names);
     if (count == 0)
         return nil;
-    
+
     NSMutableDictionary<NSString *, NSString *> *extra = [NSMutableDictionary dictionaryWithCapacity: (NSUInteger)count];
     for (unsigned i = 0; i < count; i++) {
         NSString *key = @(ppsz_names[i]);
@@ -344,9 +344,9 @@
         if (value)
             extra[key] = value;
     }
-    
+
     libvlc_media_meta_extra_names_release(ppsz_names, count);
-    
+
     return extra;
 }
 
@@ -379,7 +379,11 @@
 
 - (void)handleMediaMetaChanged:(const libvlc_meta_t)type
 {
-    [self fetchMetaDataForKey: type];
+    /* Meta change events from VLC core always arrive with meta_type=0 (Title),
+       so we must clear the entire cache and re-fetch all keys to pick up
+       changes in NowPlaying, Description, Publisher, etc. */
+    [self clearCache];
+    [self prefetch];
 }
 
 /* fetch and cache */
@@ -387,9 +391,9 @@
 - (nullable id)fetchMetaDataForKey:(const libvlc_meta_t)key
 {
     id value = nil;
-    
+
     switch (key) {
-            
+
         // NSString
         case libvlc_meta_Title:
         case libvlc_meta_Artist:
@@ -410,7 +414,7 @@
         case libvlc_meta_AlbumArtist:
             value = [self metadataStringForKey: key];
             break;
-            
+
         // NSNumber
         case libvlc_meta_TrackNumber:
         case libvlc_meta_TrackID:
@@ -421,23 +425,23 @@
         case libvlc_meta_DiscTotal:
             value = [self metadataNumberForKey: key];
             break;
-            
+
         // NSURL
         case libvlc_meta_URL:
         case libvlc_meta_ArtworkURL:
             value = [self metadataURLForKey: key];
             break;
-            
+
         default:
             VKLog(@"WARNING: undefined meta type : %d", key);
             break;
     }
-    
+
     if (value)
         dispatch_barrier_async(_metaCacheAccessQueue, ^{
             _metaCache[@(key)] = value;
         });
-    
+
     return value;
 }
 
@@ -449,10 +453,10 @@
     dispatch_sync(_metaCacheAccessQueue, ^{
         cacheValue = _metaCache[@(key)];
     });
-    
+
     if (!cacheValue)
         cacheValue = [self fetchMetaDataForKey: key];
-    
+
     return cacheValue;
 }
 
@@ -461,7 +465,7 @@
     id cacheValue = [self cacheValueForKey: key];
     if ([cacheValue isKindOfClass: NSString.class])
         return (NSString *)cacheValue;
-    
+
     return nil;
 }
 
@@ -470,7 +474,7 @@
     id cacheValue = [self cacheValueForKey: key];
     if ([cacheValue isKindOfClass: NSURL.class])
         return (NSURL *)cacheValue;
-    
+
     return nil;
 }
 
@@ -479,7 +483,7 @@
     id cacheValue = [self cacheValueForKey: key];
     if ([cacheValue isKindOfClass: NSNumber.class])
         return [(NSNumber *)cacheValue unsignedIntValue];
-    
+
     return 0;
 }
 
@@ -541,9 +545,9 @@
     libvlc_media_t *media_t = (libvlc_media_t *)_media.libVLCMediaDescriptor;
     if (!media_t)
         return;
-    
+
     libvlc_media_set_meta(media_t, key, data);
-    
+
     dispatch_barrier_async(_metaCacheAccessQueue, ^{
         [_metaCache removeObjectForKey: @(key)];
     });
@@ -572,20 +576,20 @@
 {
     if (!key)
         return nil;
-    
+
     __block id cacheValue = nil;
     dispatch_sync(_metaCacheAccessQueue, ^{
         cacheValue = _metaCache[key];
     });
-    
+
     if (!cacheValue && (cacheValue = [self metaExtraForKey: key]))
         dispatch_barrier_async(_metaCacheAccessQueue, ^{
             _metaCache[key] = cacheValue;
         });
-    
+
     if ([cacheValue isKindOfClass: NSString.class])
         return (NSString *)cacheValue;
-    
+
     return nil;
 }
 
@@ -594,18 +598,18 @@
 {
     if (!key)
         return nil;
-    
+
     libvlc_media_t *media_t = (libvlc_media_t *)_media.libVLCMediaDescriptor;
     if (!media_t)
         return nil;
-    
+
     char *value = libvlc_media_get_meta_extra(media_t, key.UTF8String);
     if (!value)
         return NSNull.null;
-    
+
     NSString *extraValue = @(value);
     free(value);
-    
+
     return extraValue;
 }
 
@@ -614,13 +618,13 @@
 {
     if (!key)
         return;
-    
+
     libvlc_media_t *media_t = (libvlc_media_t *)_media.libVLCMediaDescriptor;
     if (!media_t)
         return;
-    
+
     libvlc_media_set_meta_extra(media_t, key.UTF8String, value.UTF8String);
-    
+
     dispatch_barrier_async(_metaCacheAccessQueue, ^{
         [_metaCache removeObjectForKey: key];
     });
