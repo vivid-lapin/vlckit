@@ -1,0 +1,89 @@
+From f900189f8ccd9e07a00ed10b8e16433e1b6d3c7d Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Wed, 18 Feb 2026 00:55:23 +0900
+Subject: [PATCH] fix: Fallback to software rendering when screenshot capture
+ fails
+
+---
+ src/video_output/video_output.c | 58 +++++++++++++++++++++++++++++++--
+ 1 file changed, 55 insertions(+), 3 deletions(-)
+
+diff --git a/src/video_output/video_output.c b/src/video_output/video_output.c
+index 0ec4d219ab..bd075b13df 100644
+--- a/src/video_output/video_output.c
++++ b/src/video_output/video_output.c
+@@ -407,6 +407,47 @@ void vout_PutPicture(vout_thread_t *vout, picture_t *picture)
+     vout_control_Wake(&sys->control);
+ }
+ 
++static picture_t *SnapshotConvertToSoftware(vout_thread_t *vout, picture_t *picture)
++{
++    /* Try a few common software formats when snapshot export fails from a
++     * hardware/opaque source picture. */
++    static const vlc_fourcc_t candidates[] = {
++        VLC_CODEC_I420,
++        VLC_CODEC_NV12,
++        VLC_CODEC_RGB24,
++        VLC_CODEC_RGBA,
++    };
++
++    es_format_t src_fmt;
++    es_format_InitFromVideo(&src_fmt, &picture->format);
++
++    picture_t *converted = NULL;
++    filter_chain_t *chain = filter_chain_NewVideo(VLC_OBJECT(vout), false, NULL);
++    if (chain == NULL)
++    {
++        es_format_Clean(&src_fmt);
++        return NULL;
++    }
++
++    for (size_t i = 0; i < ARRAY_SIZE(candidates) && converted == NULL; ++i)
++    {
++        es_format_t dst_fmt = src_fmt;
++        dst_fmt.i_codec = candidates[i];
++        dst_fmt.video.i_chroma = candidates[i];
++
++        filter_chain_Reset(chain, &src_fmt, picture_GetVideoContext(picture), &dst_fmt);
++        if (filter_chain_AppendConverter(chain, &dst_fmt) != VLC_SUCCESS)
++            continue;
++
++        picture_Hold(picture);
++        converted = filter_chain_VideoFilter(chain, picture);
++    }
++
++    filter_chain_Delete(chain);
++    es_format_Clean(&src_fmt);
++    return converted;
++}
++
+ /* */
+ int vout_GetSnapshot(vout_thread_t *vout,
+                      block_t **image_dst, picture_t **picture_dst,
+@@ -428,9 +469,20 @@ int vout_GetSnapshot(vout_thread_t *vout,
+ 
+         const int override_width  = var_InheritInteger(vout, "snapshot-width");
+         const int override_height = var_InheritInteger(vout, "snapshot-height");
+-
+-        if (picture_Export(VLC_OBJECT(vout), image_dst, fmt,
+-                           picture, codec, override_width, override_height, false)) {
++        int ret = picture_Export(VLC_OBJECT(vout), image_dst, fmt, picture, codec,
++                                 override_width, override_height, false);
++        if (ret != VLC_SUCCESS)
++        {
++            picture_t *fallback = SnapshotConvertToSoftware(vout, picture);
++            if (fallback != NULL)
++            {
++                ret = picture_Export(VLC_OBJECT(vout), image_dst, fmt, fallback, codec,
++                                     override_width, override_height, false);
++                picture_Release(fallback);
++            }
++        }
++        if (ret != VLC_SUCCESS)
++        {
+             msg_Err(vout, "Failed to convert image for snapshot");
+             picture_Release(picture);
+             return VLC_EGENERIC;
+-- 
+2.39.1
+
