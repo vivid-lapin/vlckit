@@ -1,7 +1,7 @@
-From 9df301176a4f535d3e6a090316228e5cca8d2e5d Mon Sep 17 00:00:00 2001
+From 1cb303a134ac7e3ebe286528df64d740d8db9cab Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Wed, 18 Feb 2026 00:18:00 +0900
-Subject: [PATCH] fix: Fix hardcoded PNG format for snapshots
+Subject: [PATCH 9010/9014] fix: Fix hardcoded PNG format for snapshots
 
 ---
  lib/video.c | 14 ++++++++++++--
