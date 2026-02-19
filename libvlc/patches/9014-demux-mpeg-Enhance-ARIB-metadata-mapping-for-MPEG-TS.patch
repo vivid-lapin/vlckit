@@ -1,13 +1,13 @@
-From d48323a9f3b509eb8f471177454bbe5bd3b04d93 Mon Sep 17 00:00:00 2001
+From faaf08504457534168e111fefcd5542c2a73688b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 19 Feb 2026 02:08:01 +0900
-Subject: [PATCH 9014/9014] demux/mpeg: Enhance ARIB metadata mapping for
- MPEG-TS with additional fields
+Subject: [PATCH] demux/mpeg: Enhance ARIB metadata mapping for MPEG-TS with
+ additional fields
 
 ---
  modules/demux/mpeg/ts_si.c | 263 +++++++++++++++++++++++++------------
- src/input/es_out.c         | 140 ++++++++++++++++++--
- 2 files changed, 308 insertions(+), 95 deletions(-)
+ src/input/es_out.c         | 142 +++++++++++++++++++-
+ 2 files changed, 312 insertions(+), 93 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
 index a52efc85b6..89eeee6ddf 100644
@@ -29,12 +29,12 @@ index a52efc85b6..89eeee6ddf 100644
      demux_t            *p_demux = opaque;
      demux_sys_t        *p_sys = p_demux->p_sys;
 +    const bool          b_first_time_meta = ( p_sys->i_network_time_update == 0 );
- 
- 
+
+
      p_sys->i_network_time = EITConvertStartTime( p_tdt->i_utc_time );
 @@ -412,86 +417,161 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
      dvbpsi_tot_delete(p_tdt);
- 
+
      es_out_Control( p_demux->out, ES_OUT_SET_EPG_TIME, (int64_t) p_sys->i_network_time );
 +
 +    if( b_first_time_meta )
@@ -54,7 +54,7 @@ index a52efc85b6..89eeee6ddf 100644
 +        }
 +    }
  }
- 
+
 -static void EITExtractDrDescItems( demux_t *p_demux, const dvbpsi_extended_event_dr_t *pE,
 -                                   vlc_epg_event_t *p_evt )
 +typedef struct
@@ -73,7 +73,7 @@ index a52efc85b6..89eeee6ddf 100644
 +        return true;
 +    if( *pi_dst > SIZE_MAX - i_src )
 +        return false;
- 
+
 -    if( pE->i_entry_count )
 +    uint8_t *p_realloc = realloc( *pp_dst, *pi_dst + i_src );
 +    if( !p_realloc )
@@ -98,7 +98,7 @@ index a52efc85b6..89eeee6ddf 100644
 +    }
 +    free( p_items );
 +}
- 
+
 +static void EITExtractDrDescItemsRaw( const dvbpsi_extended_event_dr_t *pE,
 +                                      eit_raw_desc_item_t **pp_items, int *pi_items,
 +                                      int *pi_prev_item )
@@ -143,7 +143,7 @@ index a52efc85b6..89eeee6ddf 100644
                      break;
 -                }
 -                p_evt->description_items = p_realloc;
- 
+
 -                psz_key = EITConvertToUTF8( p_demux,
 -                                            pE->i_item_description[i],
 -                                            pE->i_item_description_length[i],
@@ -172,7 +172,7 @@ index a52efc85b6..89eeee6ddf 100644
 -            }
 -            else if( ppsz_prev == NULL )
 -                continue;
- 
+
 -            char *psz_itm = EITConvertToUTF8( p_demux,
 -                                              pE->i_item[i], pE->i_item_length[i],
 -                                              p_sys->b_broken_charset );
@@ -187,7 +187,7 @@ index a52efc85b6..89eeee6ddf 100644
 +        }
 +    }
 +}
- 
+
 -            msg_Dbg( p_demux, "       - desc='%s' item='%s'",
 -                     psz_key ? psz_key : "(null)", psz_itm );
 -            if( b_appending )
@@ -254,7 +254,7 @@ index a52efc85b6..89eeee6ddf 100644
 +        msg_Dbg( p_demux, "       - desc='%s' item='%s'", psz_key, psz_val );
      }
  }
- 
+
 @@ -535,6 +615,11 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
          dvbpsi_descriptor_t *p_dr;
          int64_t i_start;
@@ -264,11 +264,11 @@ index a52efc85b6..89eeee6ddf 100644
 +        eit_raw_desc_item_t *p_desc_items_raw = NULL;
 +        int i_desc_items_raw = 0;
 +        int i_prev_desc_item = -1;
- 
+
          i_start = EITConvertStartTime( p_evt->i_start_time );
          SI_DEBUG_TIMESHIFT(i_start);
 @@ -606,32 +691,12 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
- 
+
                      if( pE->i_text_length > 0 )
                      {
 -                        char *psz_text = EITConvertToUTF8( p_demux,
@@ -297,7 +297,7 @@ index a52efc85b6..89eeee6ddf 100644
 +                        EITRawAppend( &p_extended_text_raw, &i_extended_text_raw,
 +                                      pE->i_text, pE->i_text_length );
                      }
- 
+
 -                    EITExtractDrDescItems( p_demux, pE, p_epgevt );
 +                    EITExtractDrDescItemsRaw( pE, &p_desc_items_raw,
 +                                              &i_desc_items_raw, &i_prev_desc_item );
@@ -307,7 +307,7 @@ index a52efc85b6..89eeee6ddf 100644
 @@ -664,6 +729,22 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
              }
          }
- 
+
 +        if( i_extended_text_raw > 0 )
 +        {
 +            char *psz_text = EITConvertToUTF8( p_demux, p_extended_text_raw,
@@ -330,7 +330,7 @@ index a52efc85b6..89eeee6ddf 100644
 @@ -687,8 +768,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
      if( i_runevt || i_fallbackevt )
          vlc_epg_SetCurrent( p_epg, (i_runevt) ? i_runevt : i_fallbackevt );
- 
+
 +    /* For EIT p/f (table_id 0x4E), if no current event was determined
 +       (e.g. ARIB where running_status is always 0 and TDT may not have
 +       arrived yet), use the first event as the present event per spec */
@@ -357,7 +357,7 @@ index a52efc85b6..89eeee6ddf 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index d341adac71..29cee98cf5 100644
+index d341adac71..9b71981d84 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
 @@ -1848,7 +1848,8 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
@@ -373,7 +373,7 @@ index d341adac71..29cee98cf5 100644
 @@ -1978,6 +1979,49 @@ static void EsOutProgramEpgEvent(es_out_sys_t *p_sys, input_source_t *source,
      input_item_SetEpgEvent( p_item, p_event );
  }
- 
+
 +#define ARIB_META_EXTRA_PREFIX "PresentEventItemDescriptor:"
 +
 +static bool EsOutMetaExtraHasPrefix(const char *psz_name, const char *psz_prefix)
@@ -420,10 +420,10 @@ index d341adac71..29cee98cf5 100644
  static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
                              int i_group, const vlc_epg_t *p_epg)
  {
-@@ -2015,30 +2059,108 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2015,26 +2059,110 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          vlc_meta_SetNowPlaying( p_pgrm->p_meta, NULL );
      }
- 
+
 +    const vlc_epg_event_t *p_current = NULL;
      vlc_mutex_lock( &p_item->lock );
 +    if( p_item->p_epg_table != NULL &&
@@ -437,25 +437,30 @@ index d341adac71..29cee98cf5 100644
      for( int i = 0; i < p_item->i_epg; i++ )
      {
          const vlc_epg_t *p_tmp = p_item->pp_epg[i];
- 
+
          if( p_tmp->b_present && p_tmp->i_source_id == p_pgrm->i_id )
          {
 -            const char *psz_name = ( p_tmp->p_current ) ? p_tmp->p_current->psz_name : NULL;
+-            if( !p_pgrm->p_meta )
+-                p_pgrm->p_meta = vlc_meta_New();
+-            if( p_pgrm->p_meta )
+-                vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
+-            break;
 +                p_current = p_tmp->p_current;
 +                break;
 +            }
-+        }
-+    }
-+    vlc_mutex_unlock( &p_item->lock );
-+
+         }
+     }
+     vlc_mutex_unlock( &p_item->lock );
+
 +    const char *psz_name = ( p_current ) ? p_current->psz_name : NULL;
 +    const char *psz_short_desc = ( p_current ) ? p_current->psz_short_description : NULL;
-             if( !p_pgrm->p_meta )
-                 p_pgrm->p_meta = vlc_meta_New();
-             if( p_pgrm->p_meta )
--                vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
--            break;
++    if( !p_pgrm->p_meta )
++        p_pgrm->p_meta = vlc_meta_New();
++    if( p_pgrm->p_meta )
 +    {
++        vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
++
 +        char psz_event_start[32];
 +        char psz_event_duration[32];
 +
@@ -493,17 +498,12 @@ index d341adac71..29cee98cf5 100644
 +                vlc_meta_SetExtra( p_pgrm->p_meta, psz_extra_name, psz_value );
 +                free( psz_extra_name );
 +            }
-         }
-     }
--    vlc_mutex_unlock( &p_item->lock );
- 
++        }
++    }
++
      /* Update selected program input info */
      if( p_pgrm == p_sys->p_pgrm )
      {
--        const char *psz_nowplaying = p_pgrm->p_meta ?
--                                     vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying ) : NULL;
--
--        input_item_SetESNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
 +        const char *psz_service_name = p_pgrm->p_meta ?
 +                                       vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceName" ) : NULL;
 +        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceName", psz_service_name );
@@ -534,9 +534,9 @@ index d341adac71..29cee98cf5 100644
 +                free( ppsz_extra_names );
 +            }
 +        }
-         input_SendEventMeta( p_input );
- 
-         const char *now_playing_tr =
--- 
+         const char *psz_nowplaying = p_pgrm->p_meta ?
+                                      vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying ) : NULL;
+
+--
 2.39.1
 
