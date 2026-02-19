@@ -1,0 +1,54 @@
+From b16c8871865bfb6202b7d44cbadec778bde27ea8 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 20 Feb 2026 02:13:54 +0900
+Subject: [PATCH 2/2] feat: Add stream_filter/dualmono2
+
+---
+ modules/stream_filter/dualmono.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
+index b4d0b40ef1..cdc4ae9211 100644
+--- a/modules/stream_filter/dualmono.c
++++ b/modules/stream_filter/dualmono.c
+@@ -150,6 +150,27 @@ typedef struct
+     pes_assembler_t pes2;
+ } stream_sys_t;
+ 
++static bool is_likely_mpegts(stream_t *s)
++{
++    const uint8_t *peek = NULL;
++    ssize_t n = vlc_stream_Peek(s->s, &peek, TS_PACKET_SIZE * 6 + (TS_PACKET_SIZE - 1));
++    if (n < TS_PACKET_SIZE * 4)
++        return false;
++
++    size_t avail = (size_t)n;
++    size_t limit = avail - TS_PACKET_SIZE * 3;
++    for (size_t off = 0; off < TS_PACKET_SIZE && off < limit; ++off)
++    {
++        if (peek[off] == TS_SYNC_BYTE &&
++            peek[off + TS_PACKET_SIZE] == TS_SYNC_BYTE &&
++            peek[off + TS_PACKET_SIZE * 2] == TS_SYNC_BYTE &&
++            peek[off + TS_PACKET_SIZE * 3] == TS_SYNC_BYTE)
++            return true;
++    }
++
++    return false;
++}
++
+ static int bytevec_reserve(bytevec_t *v, size_t need)
+ {
+     if (need <= v->cap)
+@@ -1785,6 +1806,9 @@ static int Open(vlc_object_t *obj)
+ {
+     stream_t *s = (stream_t *)obj;
+ 
++    if (!is_likely_mpegts(s))
++        return VLC_EGENERIC;
++
+     stream_sys_t *sys = calloc(1, sizeof(*sys));
+     if (!sys)
+         return VLC_ENOMEM;
+-- 
+2.39.1
+
