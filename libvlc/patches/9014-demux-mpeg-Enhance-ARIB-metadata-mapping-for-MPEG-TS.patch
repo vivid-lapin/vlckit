@@ -1,30 +1,38 @@
-From a6abb631fe3b143580c0d4c37c7d281fc3bc5500 Mon Sep 17 00:00:00 2001
+From cbcfb7e4627584c799fa927670d099c3d572f391 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 19 Feb 2026 02:08:01 +0900
 Subject: [PATCH] demux/mpeg: Enhance ARIB metadata mapping for MPEG-TS with
  additional fields
 
 ---
- modules/demux/mpeg/ts_si.c | 263 +++++++++++++++++++++++++------------
- src/input/es_out.c         | 142 +++++++++++++++++++-
- 2 files changed, 312 insertions(+), 93 deletions(-)
+ modules/demux/mpeg/ts_si.c | 271 +++++++++++++++++++++++++------------
+ src/input/es_out.c         | 145 +++++++++++++++++++-
+ 2 files changed, 323 insertions(+), 93 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index a52efc85b6..89eeee6ddf 100644
+index a52efc85b6..d2b1d45526 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
-@@ -281,6 +281,10 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
+@@ -281,6 +281,18 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
                      if( pD->i_service_type >= 0x01 && pD->i_service_type <= 0x10 )
                          psz_type = ppsz_type[pD->i_service_type];
                  }
 +                if (p_sys->standard == TS_STANDARD_ARIB)
 +                {
++                    char psz_service_id[16];
++                    char psz_network_id[16];
++                    snprintf( psz_service_id, sizeof(psz_service_id),
++                              "%"PRIu16, p_srv->i_service_id );
++                    snprintf( psz_network_id, sizeof(psz_network_id),
++                              "%"PRIu16, p_sdt->i_network_id );
++                    vlc_meta_SetExtra( p_meta, "ServiceId", psz_service_id );
 +                    vlc_meta_SetExtra( p_meta, "ServiceName", str2 ? str2 : str1 );
++                    vlc_meta_SetExtra( p_meta, "ServiceNetworkId", psz_network_id );
 +                }
                  free( str1 );
                  free( str2 );
              }
-@@ -391,6 +395,7 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+@@ -391,6 +403,7 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
  {
      demux_t            *p_demux = opaque;
      demux_sys_t        *p_sys = p_demux->p_sys;
@@ -32,7 +40,7 @@ index a52efc85b6..89eeee6ddf 100644
 
 
      p_sys->i_network_time = EITConvertStartTime( p_tdt->i_utc_time );
-@@ -412,86 +417,161 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+@@ -412,86 +425,161 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
      dvbpsi_tot_delete(p_tdt);
 
      es_out_Control( p_demux->out, ES_OUT_SET_EPG_TIME, (int64_t) p_sys->i_network_time );
@@ -255,7 +263,7 @@ index a52efc85b6..89eeee6ddf 100644
      }
  }
 
-@@ -535,6 +615,11 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -535,6 +623,11 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
          dvbpsi_descriptor_t *p_dr;
          int64_t i_start;
          int i_duration;
@@ -267,7 +275,7 @@ index a52efc85b6..89eeee6ddf 100644
 
          i_start = EITConvertStartTime( p_evt->i_start_time );
          SI_DEBUG_TIMESHIFT(i_start);
-@@ -606,32 +691,12 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -606,32 +699,12 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
 
                      if( pE->i_text_length > 0 )
                      {
@@ -304,7 +312,7 @@ index a52efc85b6..89eeee6ddf 100644
                  }
              }
                  break;
-@@ -664,6 +729,22 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -664,6 +737,22 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
              }
          }
 
@@ -327,7 +335,7 @@ index a52efc85b6..89eeee6ddf 100644
          switch ( p_evt->i_running_status )
          {
              case TS_SI_RUNSTATUS_RUNNING:
-@@ -687,8 +768,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -687,8 +776,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
      if( i_runevt || i_fallbackevt )
          vlc_epg_SetCurrent( p_epg, (i_runevt) ? i_runevt : i_fallbackevt );
 
@@ -346,7 +354,7 @@ index a52efc85b6..89eeee6ddf 100644
          if( p_epg->b_present && p_epg->p_current )
          {
              ts_pat_t *p_pat = ts_pid_Get(&p_sys->pids, 0)->u.p_pat;
-@@ -698,8 +789,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -698,8 +797,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
                  p_pmt->eit.i_event_start = p_epg->p_current->i_start;
                  p_pmt->eit.i_event_length = p_epg->p_current->i_duration;
              }
@@ -357,7 +365,7 @@ index a52efc85b6..89eeee6ddf 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index d341adac71..6e77b3048e 100644
+index d341adac71..a21a30148c 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
 @@ -1848,7 +1848,8 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
@@ -420,7 +428,7 @@ index d341adac71..6e77b3048e 100644
  static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
                              int i_group, const vlc_epg_t *p_epg)
  {
-@@ -2015,26 +2059,110 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+@@ -2015,26 +2059,113 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
          vlc_meta_SetNowPlaying( p_pgrm->p_meta, NULL );
      }
 
@@ -504,9 +512,12 @@ index d341adac71..6e77b3048e 100644
      /* Update selected program input info */
      if( p_pgrm == p_sys->p_pgrm )
      {
-+        const char *psz_service_name = p_pgrm->p_meta ?
-+                                       vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceName" ) : NULL;
-+        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceName", psz_service_name );
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceId",
++                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceId" ) : NULL );
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceName",
++                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceName" ) : NULL );
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceNetworkId",
++                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceNetworkId" ) : NULL );
 +        input_item_SetMetaExtra( input_priv(p_input)->p_item, "PresentEventName",
 +                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "PresentEventName" ) : NULL );
 +        input_item_SetMetaExtra( input_priv(p_input)->p_item, "PresentEventDesc",
