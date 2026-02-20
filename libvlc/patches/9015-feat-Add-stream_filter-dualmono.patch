@@ -1,14 +1,14 @@
-From 5a59858c26747c90db22ba48fe7d2463c6d7961d Mon Sep 17 00:00:00 2001
+From ad08de0e8198f4f6890ad7667c9b63f1a5d1476c Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 2127 +++++++++++++++++++
+ modules/stream_filter/dualmono.c            | 2140 +++++++++++++++++++
  modules/stream_filter/dualmono_aac_tables.h | 1451 +++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3586 insertions(+)
+ 4 files changed, 3599 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,10 +25,10 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..d5c41718b2
+index 0000000000..9afed89297
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,2127 @@
+@@ -0,0 +1,2140 @@
 +/**
 +MIT License
 +
@@ -1495,6 +1495,8 @@ index 0000000000..d5c41718b2
 +
 +    sys->aac_pid1 = -1;
 +    sys->aac_pid2 = -1;
++    const uint8_t *aac1_desc = NULL;
++    uint16_t aac1_desc_len = 0;
 +
 +    size_t i = es_start;
 +    while (i + 5 <= orig_len - 4)
@@ -1517,6 +1519,8 @@ index 0000000000..d5c41718b2
 +            {
 +                sys->aac_pid1 = pid;
 +                out_pid = pid;
++                aac1_desc = orig + i + 5;
++                aac1_desc_len = es_info_length;
 +            }
 +            else if (sys->aac_pid2 < 0)
 +            {
@@ -1542,14 +1546,23 @@ index 0000000000..d5c41718b2
 +
 +    if (sys->dualmono_detected && sys->aac_pid2 < 0)
 +    {
++        uint16_t desc_len = aac1_desc_len;
 +        uint8_t add[5] = {
 +            DM_AAC_STREAM_TYPE,
 +            (uint8_t)(0xe0 | ((sys->mapped_pid2 >> 8) & 0x1f)),
 +            (uint8_t)(sys->mapped_pid2 & 0xff),
-+            0xf0, 0x00,
++            (uint8_t)(0xf0 | ((desc_len >> 8) & 0x0f)),
++            (uint8_t)(desc_len & 0xff),
 +        };
 +        if (bytevec_append(new_sec, add, sizeof(add)) != VLC_SUCCESS)
 +            return VLC_ENOMEM;
++        if (desc_len > 0)
++        {
++            if (!aac1_desc)
++                return VLC_EGENERIC;
++            if (bytevec_append(new_sec, aac1_desc, desc_len) != VLC_SUCCESS)
++                return VLC_ENOMEM;
++        }
 +        *modified = true;
 +    }
 +
