@@ -1,14 +1,14 @@
-From 734f9be1b3e95126ffd833757ff79c0d275fd2c0 Mon Sep 17 00:00:00 2001
+From 5a59858c26747c90db22ba48fe7d2463c6d7961d Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 2067 +++++++++++++++++++
+ modules/stream_filter/dualmono.c            | 2127 +++++++++++++++++++
  modules/stream_filter/dualmono_aac_tables.h | 1451 +++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3526 insertions(+)
+ 4 files changed, 3586 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,10 +25,10 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..31327d5d6c
+index 0000000000..d5c41718b2
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,2067 @@
+@@ -0,0 +1,2127 @@
 +/**
 +MIT License
 +
@@ -110,6 +110,8 @@ index 0000000000..31327d5d6c
 +{
 +    bool started;
 +    bytevec_t buf;
++    uint8_t first_cc;
++    bool have_first_cc;
 +} pes_assembler_t;
 +
 +typedef struct
@@ -178,6 +180,11 @@ index 0000000000..31327d5d6c
 +    uint8_t mapped_cc2;
 +    uint8_t passthrough_cc1;
 +    uint8_t passthrough_cc2;
++    bool pmt_cc_seeded;
++    bool mapped_cc1_seeded;
++    bool mapped_cc2_seeded;
++    bool passthrough_cc1_seeded;
++    bool passthrough_cc2_seeded;
 +
 +    bool dualmono_detected;
 +    unsigned dualmono_no_sub_pes;
@@ -205,9 +212,15 @@ index 0000000000..31327d5d6c
 +    sys->mapped_cc2 = 0;
 +    sys->passthrough_cc1 = 0;
 +    sys->passthrough_cc2 = 0;
++    sys->mapped_cc1_seeded = false;
++    sys->mapped_cc2_seeded = false;
++    sys->passthrough_cc1_seeded = false;
++    sys->passthrough_cc2_seeded = false;
 +
 +    sys->pes1.started = false;
 +    sys->pes2.started = false;
++    sys->pes1.have_first_cc = false;
++    sys->pes2.have_first_cc = false;
 +    bytevec_reset(&sys->pes1.buf);
 +    bytevec_reset(&sys->pes2.buf);
 +}
@@ -1674,6 +1687,17 @@ index 0000000000..31327d5d6c
 +        sys->dualmono_no_sub_pes = 0;
 +        msg_Dbg(s, "dualmono detected on AAC PID %d", sys->aac_pid1);
 +
++        if (!sys->passthrough_cc1_seeded && a->have_first_cc)
++        {
++            sys->passthrough_cc1 = a->first_cc;
++            sys->passthrough_cc1_seeded = true;
++        }
++        if (!sys->mapped_cc2_seeded && a->have_first_cc)
++        {
++            sys->mapped_cc2 = a->first_cc;
++            sys->mapped_cc2_seeded = true;
++        }
++
 +        if (emit_pes_packets(&sys->out, (uint16_t)sys->aac_pid1, &sys->passthrough_cc1,
 +                             main_pes.p, main_pes.len) != VLC_SUCCESS)
 +        {
@@ -1691,6 +1715,12 @@ index 0000000000..31327d5d6c
 +    {
 +        uint16_t out_pid = (which == 1) ? (uint16_t)sys->aac_pid1 : (uint16_t)sys->aac_pid2;
 +        uint8_t *cc = (which == 1) ? &sys->passthrough_cc1 : &sys->passthrough_cc2;
++        bool *seeded = (which == 1) ? &sys->passthrough_cc1_seeded : &sys->passthrough_cc2_seeded;
++        if (!*seeded && a->have_first_cc)
++        {
++            *cc = a->first_cc;
++            *seeded = true;
++        }
 +        if (emit_pes_packets(&sys->out, out_pid, cc, main_pes.p, main_pes.len) != VLC_SUCCESS)
 +        {
 +            ret = VLC_ENOMEM;
@@ -1700,6 +1730,11 @@ index 0000000000..31327d5d6c
 +        if (allow_sub && sub_pes.len > 0)
 +        {
 +            sys->dualmono_no_sub_pes = 0;
++            if (!sys->mapped_cc2_seeded && a->have_first_cc)
++            {
++                sys->mapped_cc2 = a->first_cc;
++                sys->mapped_cc2_seeded = true;
++            }
 +            if (emit_pes_packets(&sys->out, sys->mapped_pid2, &sys->mapped_cc2,
 +                                 sub_pes.p, sub_pes.len) != VLC_SUCCESS)
 +            {
@@ -1722,6 +1757,12 @@ index 0000000000..31327d5d6c
 +    {
 +        uint16_t out_pid = (uint16_t)((which == 1) ? sys->aac_pid1 : sys->aac_pid2);
 +        uint8_t *cc = (which == 1) ? &sys->passthrough_cc1 : &sys->passthrough_cc2;
++        bool *seeded = (which == 1) ? &sys->passthrough_cc1_seeded : &sys->passthrough_cc2_seeded;
++        if (!*seeded && a->have_first_cc)
++        {
++            *cc = a->first_cc;
++            *seeded = true;
++        }
 +        if (emit_pes_packets(&sys->out, out_pid, cc, a->buf.p, a->buf.len) != VLC_SUCCESS)
 +        {
 +            ret = VLC_ENOMEM;
@@ -1734,6 +1775,7 @@ index 0000000000..31327d5d6c
 +        msg_Warn(s, "failed to process PES for PID %d", (which == 1) ? sys->aac_pid1 : sys->aac_pid2);
 +
 +    a->started = false;
++    a->have_first_cc = false;
 +    bytevec_reset(&a->buf);
 +    bytevec_clear(&main_pes);
 +    bytevec_clear(&sub_pes);
@@ -1795,6 +1837,11 @@ index 0000000000..31327d5d6c
 +            sys->pmt_collecting = false;
 +            sys->pmt_expected_len = 0;
 +            bytevec_reset(&sys->pmt_section);
++            if (!sys->pmt_cc_seeded)
++            {
++                sys->pmt_cc = pkt[3] & 0x0f;
++                sys->pmt_cc_seeded = true;
++            }
 +        }
 +
 +        if (has_payload && payload_len > 0)
@@ -1901,6 +1948,8 @@ index 0000000000..31327d5d6c
 +            if (process_completed_pes(s, sys, 1, sys->aac_pid2 < 0) != VLC_SUCCESS)
 +                return VLC_EGENERIC;
 +            sys->pes1.started = true;
++            sys->pes1.first_cc = pkt[3] & 0x0f;
++            sys->pes1.have_first_cc = true;
 +            bytevec_reset(&sys->pes1.buf);
 +        }
 +
@@ -1919,6 +1968,8 @@ index 0000000000..31327d5d6c
 +            if (process_completed_pes(s, sys, 2, false) != VLC_SUCCESS)
 +                return VLC_EGENERIC;
 +            sys->pes2.started = true;
++            sys->pes2.first_cc = pkt[3] & 0x0f;
++            sys->pes2.have_first_cc = true;
 +            bytevec_reset(&sys->pes2.buf);
 +        }
 +
@@ -2018,9 +2069,13 @@ index 0000000000..31327d5d6c
 +    bytevec_reset(&sys->pmt_section);
 +    sys->pes1.started = false;
 +    sys->pes2.started = false;
++    sys->pes1.have_first_cc = false;
++    sys->pes2.have_first_cc = false;
 +    sys->upstream_eof = false;
 +    sys->flushed_eof = false;
 +    sys->pmt_pid = -1;
++    sys->pmt_cc = 0;
++    sys->pmt_cc_seeded = false;
 +    reset_dualmono_runtime_state(sys);
 +    sys->have_pmt_identity = false;
 +    sys->pmt_program_number = 0;
@@ -2057,6 +2112,11 @@ index 0000000000..31327d5d6c
 +    sys->mapped_cc2 = 0;
 +    sys->passthrough_cc1 = 0;
 +    sys->passthrough_cc2 = 0;
++    sys->pmt_cc_seeded = false;
++    sys->mapped_cc1_seeded = false;
++    sys->mapped_cc2_seeded = false;
++    sys->passthrough_cc1_seeded = false;
++    sys->passthrough_cc2_seeded = false;
 +    sys->dualmono_detected = false;
 +    sys->have_pmt_identity = false;
 +    sys->pmt_program_number = 0;
