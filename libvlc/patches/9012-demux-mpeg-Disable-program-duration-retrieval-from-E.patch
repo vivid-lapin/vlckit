@@ -1,0 +1,53 @@
+From 342a2722bcc5085537741f5354833f75a4cf46ae Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 16 Feb 2026 20:55:45 +0900
+Subject: [PATCH 9012/9014] demux/mpeg: Disable program duration retrieval from
+ EIT
+
+---
+ modules/demux/mpeg/ts.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index e63ad9f421..45e3323884 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -933,7 +933,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         pf = va_arg( args, double * );
+ 
+         /* Access control test is because EPG for recordings is not relevant */
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_time, i_length;
+             if( !EITCurrentEventTime( p_pmt, p_sys, &i_time, &i_length ) && i_length > 0 )
+@@ -976,7 +976,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         if(!p_sys->b_canseek)
+             break;
+ 
+-        if( p_sys->b_access_control &&
++        if( false && p_sys->b_access_control &&
+            !p_sys->b_ignore_time_for_positions && b_bool && p_pmt )
+         {
+             time_t i_time, i_length = 0;
+@@ -1033,7 +1033,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+     }
+ 
+     case DEMUX_GET_TIME:
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_event_start;
+             if( !EITCurrentEventTime( p_pmt, p_sys, &i_event_start, NULL ) )
+@@ -1059,7 +1059,7 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+         return VLC_SUCCESS;
+ 
+     case DEMUX_GET_LENGTH:
+-        if( p_sys->b_access_control )
++        if( false && p_sys->b_access_control )
+         {
+             time_t i_event_duration;
+             if( !EITCurrentEventTime( p_pmt, p_sys, NULL, &i_event_duration ) )
+-- 
+2.39.1
+
