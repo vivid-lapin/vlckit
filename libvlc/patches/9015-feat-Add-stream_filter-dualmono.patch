@@ -1,14 +1,14 @@
-From 2a28e26d4123e2a1592bf534eae3d59fa7d52d49 Mon Sep 17 00:00:00 2001
+From 518cfb0bf5fb0d1fdf403c541ff05c3bb0d484fc Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 1977 +++++++++++++++++++
- modules/stream_filter/dualmono_aac_tables.h | 1451 ++++++++++++++
+ modules/stream_filter/dualmono.c            | 2010 +++++++++++++++++++
+ modules/stream_filter/dualmono_aac_tables.h | 1451 +++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3436 insertions(+)
+ 4 files changed, 3469 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,10 +25,10 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..004de8db37
+index 0000000000..4461cc8189
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,1977 @@
+@@ -0,0 +1,2010 @@
 +/**
 +MIT License
 +
@@ -75,6 +75,7 @@ index 0000000000..004de8db37
 +#define DM_DEFAULT_PID2 0x1ff1
 +
 +#define DM_AAC_STREAM_TYPE 0x0f
++#define DM_DUALMONO_HOLD_PES 128
 +
 +#define DM_MAX_WINDOW_GROUPS 8
 +#define DM_MAX_SFB 64
@@ -178,6 +179,7 @@ index 0000000000..004de8db37
 +    uint8_t passthrough_cc2;
 +
 +    bool dualmono_detected;
++    unsigned dualmono_no_sub_pes;
 +    bool have_pmt_identity;
 +    uint16_t pmt_program_number;
 +    uint8_t pmt_version;
@@ -195,6 +197,7 @@ index 0000000000..004de8db37
 +static void reset_dualmono_runtime_state(stream_sys_t *sys)
 +{
 +    sys->dualmono_detected = false;
++    sys->dualmono_no_sub_pes = 0;
 +    sys->aac_pid1 = -1;
 +    sys->aac_pid2 = -1;
 +    sys->mapped_cc1 = 0;
@@ -1400,8 +1403,10 @@ index 0000000000..004de8db37
 +
 +static int rebuild_pmt_section(stream_t *s, stream_sys_t *sys,
 +                               const uint8_t *orig, size_t orig_len,
-+                               bytevec_t *new_sec)
++                               bytevec_t *new_sec, bool *modified)
 +{
++    *modified = false;
++
 +    if (orig_len < 12 || orig[0] != 0x02)
 +        return VLC_EGENERIC;
 +
@@ -1455,6 +1460,9 @@ index 0000000000..004de8db37
 +        entry[3] = 0xf0 | ((es_info_length >> 8) & 0x0f);
 +        entry[4] = es_info_length & 0xff;
 +
++        if (out_pid != pid)
++            *modified = true;
++
 +        if (bytevec_append(new_sec, entry, sizeof(entry)) != VLC_SUCCESS ||
 +            bytevec_append(new_sec, orig + i + 5, es_info_length) != VLC_SUCCESS)
 +            return VLC_ENOMEM;
@@ -1472,6 +1480,7 @@ index 0000000000..004de8db37
 +        };
 +        if (bytevec_append(new_sec, add, sizeof(add)) != VLC_SUCCESS)
 +            return VLC_ENOMEM;
++        *modified = true;
 +    }
 +
 +    size_t with_crc = new_sec->len + 4;
@@ -1605,6 +1614,7 @@ index 0000000000..004de8db37
 +    if (detected_now)
 +    {
 +        sys->dualmono_detected = true;
++        sys->dualmono_no_sub_pes = 0;
 +        msg_Dbg(s, "dualmono detected on AAC PID %d", sys->aac_pid1);
 +
 +        if (emit_pes_packets(&sys->out, (uint16_t)sys->aac_pid1, &sys->passthrough_cc1,
@@ -1628,6 +1638,27 @@ index 0000000000..004de8db37
 +        {
 +            ret = VLC_ENOMEM;
 +            goto out;
++        }
++
++        if (allow_sub && sub_pes.len > 0)
++        {
++            sys->dualmono_no_sub_pes = 0;
++            if (emit_pes_packets(&sys->out, sys->mapped_pid2, &sys->mapped_cc2,
++                                 sub_pes.p, sub_pes.len) != VLC_SUCCESS)
++            {
++                ret = VLC_ENOMEM;
++                goto out;
++            }
++        }
++        else if (allow_sub)
++        {
++            if (++sys->dualmono_no_sub_pes > DM_DUALMONO_HOLD_PES)
++            {
++                sys->dualmono_detected = false;
++                sys->dualmono_no_sub_pes = 0;
++                msg_Dbg(s, "dualmono: no sub stream for %u PES, disable dualmono mode",
++                        DM_DUALMONO_HOLD_PES);
++            }
 +        }
 +    }
 +    else
@@ -1771,11 +1802,13 @@ index 0000000000..004de8db37
 +                        }
 +
 +                        bytevec_t new_pmt = {0};
++                        bool modified = false;
 +                        int ret = rebuild_pmt_section(s, sys, sys->pmt_section.p,
-+                                                      sys->pmt_expected_len, &new_pmt);
++                                                      sys->pmt_expected_len, &new_pmt, &modified);
 +                        if (ret == VLC_SUCCESS)
 +                        {
-+                            msg_Dbg(s, "dualmono: PMT section rewritten (len=%zu)", new_pmt.len);
++                            if (modified)
++                                msg_Dbg(s, "dualmono: PMT section rewritten (len=%zu)", new_pmt.len);
 +                            if (emit_psi_section(&sys->out, pid, &sys->pmt_cc,
 +                                                 new_pmt.p, new_pmt.len) != VLC_SUCCESS)
 +                            {
