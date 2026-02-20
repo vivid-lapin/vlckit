@@ -1,14 +1,14 @@
-From 080b67c86b0bc392915e6a0cc1fd6bdea6c012a5 Mon Sep 17 00:00:00 2001
+From 2a28e26d4123e2a1592bf534eae3d59fa7d52d49 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 1991 +++++++++++++++++++
+ modules/stream_filter/dualmono.c            | 1977 +++++++++++++++++++
  modules/stream_filter/dualmono_aac_tables.h | 1451 ++++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3450 insertions(+)
+ 4 files changed, 3436 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,10 +25,10 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..7fe3134c27
+index 0000000000..004de8db37
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,1991 @@
+@@ -0,0 +1,1977 @@
 +/**
 +MIT License
 +
@@ -1441,14 +1441,12 @@ index 0000000000..7fe3134c27
 +            if (sys->aac_pid1 < 0)
 +            {
 +                sys->aac_pid1 = pid;
-+                if (sys->dualmono_detected)
-+                    out_pid = sys->mapped_pid1;
++                out_pid = pid;
 +            }
 +            else if (sys->aac_pid2 < 0)
 +            {
 +                sys->aac_pid2 = pid;
-+                if (sys->dualmono_detected)
-+                    out_pid = sys->mapped_pid2;
++                out_pid = pid;
 +            }
 +        }
 +
@@ -1462,18 +1460,6 @@ index 0000000000..7fe3134c27
 +            return VLC_ENOMEM;
 +
 +        i += es_size;
-+    }
-+
-+    if (sys->dualmono_detected && sys->aac_pid1 < 0)
-+    {
-+        uint8_t add[5] = {
-+            DM_AAC_STREAM_TYPE,
-+            (uint8_t)(0xe0 | ((sys->mapped_pid1 >> 8) & 0x1f)),
-+            (uint8_t)(sys->mapped_pid1 & 0xff),
-+            0xf0, 0x00,
-+        };
-+        if (bytevec_append(new_sec, add, sizeof(add)) != VLC_SUCCESS)
-+            return VLC_ENOMEM;
 +    }
 +
 +    if (sys->dualmono_detected && sys->aac_pid2 < 0)
@@ -1509,8 +1495,8 @@ index 0000000000..7fe3134c27
 +
 +    if (sys->dualmono_detected)
 +    {
-+        msg_Dbg(s, "PMT updated: source AAC PID1=%d PID2=%d -> mapped PID1=%u PID2=%u",
-+                sys->aac_pid1, sys->aac_pid2, sys->mapped_pid1, sys->mapped_pid2);
++        msg_Dbg(s, "PMT updated: source AAC PID1=%d PID2=%d -> output PID1=%d PID2=%u",
++                sys->aac_pid1, sys->aac_pid2, sys->aac_pid1, sys->mapped_pid2);
 +    }
 +
 +    return VLC_SUCCESS;
@@ -1621,7 +1607,7 @@ index 0000000000..7fe3134c27
 +        sys->dualmono_detected = true;
 +        msg_Dbg(s, "dualmono detected on AAC PID %d", sys->aac_pid1);
 +
-+        if (emit_pes_packets(&sys->out, sys->mapped_pid1, &sys->mapped_cc1,
++        if (emit_pes_packets(&sys->out, (uint16_t)sys->aac_pid1, &sys->passthrough_cc1,
 +                             main_pes.p, main_pes.len) != VLC_SUCCESS)
 +        {
 +            ret = VLC_ENOMEM;
@@ -1636,8 +1622,8 @@ index 0000000000..7fe3134c27
 +    }
 +    else if (sys->dualmono_detected)
 +    {
-+        uint16_t out_pid = (which == 1) ? sys->mapped_pid1 : sys->mapped_pid2;
-+        uint8_t *cc = (which == 1) ? &sys->mapped_cc1 : &sys->mapped_cc2;
++        uint16_t out_pid = (which == 1) ? (uint16_t)sys->aac_pid1 : (uint16_t)sys->aac_pid2;
++        uint8_t *cc = (which == 1) ? &sys->passthrough_cc1 : &sys->passthrough_cc2;
 +        if (emit_pes_packets(&sys->out, out_pid, cc, main_pes.p, main_pes.len) != VLC_SUCCESS)
 +        {
 +            ret = VLC_ENOMEM;
