@@ -1,14 +1,14 @@
-From 518cfb0bf5fb0d1fdf403c541ff05c3bb0d484fc Mon Sep 17 00:00:00 2001
+From 734f9be1b3e95126ffd833757ff79c0d275fd2c0 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 2010 +++++++++++++++++++
+ modules/stream_filter/dualmono.c            | 2067 +++++++++++++++++++
  modules/stream_filter/dualmono_aac_tables.h | 1451 +++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3469 insertions(+)
+ 4 files changed, 3526 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,14 +25,15 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..4461cc8189
+index 0000000000..31327d5d6c
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,2010 @@
+@@ -0,0 +1,2067 @@
 +/**
 +MIT License
 +
 +Copyright (c) 2021 もにょ～ん
++Copyright (c) 2021 xtne6f
 +
 +Permission is hereby granted, free of charge, to any person obtaining a copy
 +of this software and associated documentation files (the "Software"), to deal
@@ -1053,6 +1054,9 @@ index 0000000000..4461cc8189
 +    if (!br_read(br, 4, &ext_type))
 +        return VLC_EGENERIC;
 +
++    if (ext_type == 11 || ext_type == 13 || ext_type == 14)
++        return VLC_EGENERIC;
++
 +    if (ext_type == 0x1)
 +    {
 +        if (!br_read(br, 4, &v))
@@ -1090,6 +1094,38 @@ index 0000000000..4461cc8189
 +            return VLC_EGENERIC;
 +        cnt -= consumed;
 +    }
++
++    return VLC_SUCCESS;
++}
++
++static int parse_data_stream_element(bitreader_t *br)
++{
++    uint32_t v;
++    bool byte_align;
++
++    if (!br_read(br, 4, &v))
++        return VLC_EGENERIC;
++
++    if (!br_read_bool(br, &byte_align))
++        return VLC_EGENERIC;
++
++    uint32_t cnt;
++    if (!br_read(br, 8, &cnt))
++        return VLC_EGENERIC;
++    if (cnt == 255)
++    {
++        uint32_t extra;
++        if (!br_read(br, 8, &extra))
++            return VLC_EGENERIC;
++        cnt += extra;
++    }
++
++    if (byte_align && !br_byte_align(br))
++        return VLC_EGENERIC;
++
++    for (uint32_t i = 0; i < cnt; ++i)
++        if (!br_read(br, 8, &v))
++            return VLC_EGENERIC;
 +
 +    return VLC_SUCCESS;
 +}
@@ -1138,6 +1174,11 @@ index 0000000000..4461cc8189
 +        else if (id == 0x5)
 +        {
 +            if (parse_program_config_element(&br) != VLC_SUCCESS)
++                return out;
++        }
++        else if (id == 0x4)
++        {
++            if (parse_data_stream_element(&br) != VLC_SUCCESS)
 +                return out;
 +        }
 +        else if (id == 0x6)
@@ -1230,7 +1271,23 @@ index 0000000000..4461cc8189
 +        const uint8_t *frame = in + off;
 +        size_t frame_len = h.frame_length;
 +
++        if (h.sf_index < 3 || h.sf_index > 5)
++        {
++            if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
++                return VLC_ENOMEM;
++            off += frame_len;
++            continue;
++        }
++
 +        if (h.channel_configuration != 0)
++        {
++            if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
++                return VLC_ENOMEM;
++            off += frame_len;
++            continue;
++        }
++
++        if (h.num_raw_data_blocks != 0)
 +        {
 +            if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
 +                return VLC_ENOMEM;
@@ -1251,7 +1308,7 @@ index 0000000000..4461cc8189
 +        size_t raw_len = frame_len - raw_start;
 +
 +        aac_split_points_t sp = parse_aac_raw_data_block(raw, raw_len);
-+        if (!sp.ok || !sp.have_end || sp.sce_count < 2)
++        if (!sp.ok || !sp.have_end || sp.sce_count != 2)
 +        {
 +            if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
 +                return VLC_ENOMEM;
