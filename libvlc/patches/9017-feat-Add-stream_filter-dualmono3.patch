@@ -1,29 +1,201 @@
-From 365e9354841a8e6716b00538d062c9864fa6d92c Mon Sep 17 00:00:00 2001
+From 026e650511e747c5918fa956105df27b916db137 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 20:18:18 +0900
-Subject: [PATCH 2/2] feat: Add stream_filter/dualmono3
+Subject: [PATCH] feat: Add stream_filter/dualmono3
 
 ---
- modules/stream_filter/dualmono.c | 95 +++++++++++++++++++++++---------
- 1 file changed, 70 insertions(+), 25 deletions(-)
+ modules/stream_filter/dualmono.c | 226 +++++++++++++++++++++++++------
+ 1 file changed, 181 insertions(+), 45 deletions(-)
 
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
-index cdc4ae9211..8a6cd27758 100644
+index cdc4ae9211..7fe3134c27 100644
 --- a/modules/stream_filter/dualmono.c
 +++ b/modules/stream_filter/dualmono.c
-@@ -144,7 +144,9 @@ typedef struct
+@@ -143,13 +143,40 @@ typedef struct
+     uint8_t pmt_cc;
      uint8_t mapped_cc1;
      uint8_t mapped_cc2;
- 
++    uint8_t passthrough_cc1;
++    uint8_t passthrough_cc2;
+
 -    bool drop_pmt_continuation;
++    bool dualmono_detected;
++    bool have_pmt_identity;
++    uint16_t pmt_program_number;
++    uint8_t pmt_version;
++
 +    bool pmt_collecting;
 +    size_t pmt_expected_len;
 +    bytevec_t pmt_section;
- 
+
      pes_assembler_t pes1;
      pes_assembler_t pes2;
-@@ -1619,48 +1621,86 @@ static int process_ts_packet(stream_t *s, stream_sys_t *sys, const uint8_t *pkt)
- 
+ } stream_sys_t;
+
++static void bytevec_reset(bytevec_t *v);
++
++static void reset_dualmono_runtime_state(stream_sys_t *sys)
++{
++    sys->dualmono_detected = false;
++    sys->aac_pid1 = -1;
++    sys->aac_pid2 = -1;
++    sys->mapped_cc1 = 0;
++    sys->mapped_cc2 = 0;
++    sys->passthrough_cc1 = 0;
++    sys->passthrough_cc2 = 0;
++
++    sys->pes1.started = false;
++    sys->pes2.started = false;
++    bytevec_reset(&sys->pes1.buf);
++    bytevec_reset(&sys->pes2.buf);
++}
++
+ static bool is_likely_mpegts(stream_t *s)
+ {
+     const uint8_t *peek = NULL;
+@@ -1169,7 +1196,7 @@ static int transform_adts_payload(const uint8_t *in, size_t in_len,
+         const uint8_t *frame = in + off;
+         size_t frame_len = h.frame_length;
+
+-        if (h.channel_configuration != 0 && h.channel_configuration != 1)
++        if (h.channel_configuration != 0)
+         {
+             if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
+                 return VLC_ENOMEM;
+@@ -1190,7 +1217,7 @@ static int transform_adts_payload(const uint8_t *in, size_t in_len,
+         size_t raw_len = frame_len - raw_start;
+
+         aac_split_points_t sp = parse_aac_raw_data_block(raw, raw_len);
+-        if (!sp.ok || !sp.have_end || sp.sce_count <= 0)
++        if (!sp.ok || !sp.have_end || sp.sce_count < 2)
+         {
+             if (bytevec_append(main_out, frame, frame_len) != VLC_SUCCESS)
+                 return VLC_ENOMEM;
+@@ -1383,12 +1410,14 @@ static int rebuild_pmt_section(stream_t *s, stream_sys_t *sys,
+             if (sys->aac_pid1 < 0)
+             {
+                 sys->aac_pid1 = pid;
+-                out_pid = sys->mapped_pid1;
++                if (sys->dualmono_detected)
++                    out_pid = sys->mapped_pid1;
+             }
+             else if (sys->aac_pid2 < 0)
+             {
+                 sys->aac_pid2 = pid;
+-                out_pid = sys->mapped_pid2;
++                if (sys->dualmono_detected)
++                    out_pid = sys->mapped_pid2;
+             }
+         }
+
+@@ -1404,7 +1433,7 @@ static int rebuild_pmt_section(stream_t *s, stream_sys_t *sys,
+         i += es_size;
+     }
+
+-    if (sys->aac_pid1 < 0)
++    if (sys->dualmono_detected && sys->aac_pid1 < 0)
+     {
+         uint8_t add[5] = {
+             DM_AAC_STREAM_TYPE,
+@@ -1416,7 +1445,7 @@ static int rebuild_pmt_section(stream_t *s, stream_sys_t *sys,
+             return VLC_ENOMEM;
+     }
+
+-    if (sys->aac_pid2 < 0)
++    if (sys->dualmono_detected && sys->aac_pid2 < 0)
+     {
+         uint8_t add[5] = {
+             DM_AAC_STREAM_TYPE,
+@@ -1447,8 +1476,11 @@ static int rebuild_pmt_section(stream_t *s, stream_sys_t *sys,
+     if (bytevec_append(new_sec, crc_bytes, sizeof(crc_bytes)) != VLC_SUCCESS)
+         return VLC_ENOMEM;
+
+-    msg_Dbg(s, "PMT updated: source AAC PID1=%d PID2=%d -> mapped PID1=%u PID2=%u",
+-            sys->aac_pid1, sys->aac_pid2, sys->mapped_pid1, sys->mapped_pid2);
++    if (sys->dualmono_detected)
++    {
++        msg_Dbg(s, "PMT updated: source AAC PID1=%d PID2=%d -> mapped PID1=%u PID2=%u",
++                sys->aac_pid1, sys->aac_pid2, sys->mapped_pid1, sys->mapped_pid2);
++    }
+
+     return VLC_SUCCESS;
+ }
+@@ -1534,22 +1566,36 @@ static int process_completed_pes(stream_t *s, stream_sys_t *sys,
+     if (!a->started || a->buf.len == 0)
+         return VLC_SUCCESS;
+
++    int ret = VLC_SUCCESS;
+     bytevec_t main_pes = {0}, sub_pes = {0};
+-    int ret = rewrite_pes_payload(a->buf.p, a->buf.len, &main_pes, &sub_pes);
+-    if (ret != VLC_SUCCESS)
+-        goto out;
+-
+-    uint16_t out_pid = (which == 1) ? sys->mapped_pid1 : sys->mapped_pid2;
+-    uint8_t *cc = (which == 1) ? &sys->mapped_cc1 : &sys->mapped_cc2;
++    bool detected_now = false;
+
+-    if (emit_pes_packets(&sys->out, out_pid, cc, main_pes.p, main_pes.len) != VLC_SUCCESS)
++    if (!sys->dualmono_detected && allow_sub)
+     {
+-        ret = VLC_ENOMEM;
+-        goto out;
++        ret = rewrite_pes_payload(a->buf.p, a->buf.len, &main_pes, &sub_pes);
++        if (ret != VLC_SUCCESS)
++            goto out;
++        if (sub_pes.len > 0)
++            detected_now = true;
++    }
++    else if (sys->dualmono_detected)
++    {
++        ret = rewrite_pes_payload(a->buf.p, a->buf.len, &main_pes, &sub_pes);
++        if (ret != VLC_SUCCESS)
++            goto out;
+     }
+
+-    if (allow_sub && sub_pes.len > 0)
++    if (detected_now)
+     {
++        sys->dualmono_detected = true;
++        msg_Dbg(s, "dualmono detected on AAC PID %d", sys->aac_pid1);
++
++        if (emit_pes_packets(&sys->out, sys->mapped_pid1, &sys->mapped_cc1,
++                             main_pes.p, main_pes.len) != VLC_SUCCESS)
++        {
++            ret = VLC_ENOMEM;
++            goto out;
++        }
+         if (emit_pes_packets(&sys->out, sys->mapped_pid2, &sys->mapped_cc2,
+                              sub_pes.p, sub_pes.len) != VLC_SUCCESS)
+         {
+@@ -1557,6 +1603,26 @@ static int process_completed_pes(stream_t *s, stream_sys_t *sys,
+             goto out;
+         }
+     }
++    else if (sys->dualmono_detected)
++    {
++        uint16_t out_pid = (which == 1) ? sys->mapped_pid1 : sys->mapped_pid2;
++        uint8_t *cc = (which == 1) ? &sys->mapped_cc1 : &sys->mapped_cc2;
++        if (emit_pes_packets(&sys->out, out_pid, cc, main_pes.p, main_pes.len) != VLC_SUCCESS)
++        {
++            ret = VLC_ENOMEM;
++            goto out;
++        }
++    }
++    else
++    {
++        uint16_t out_pid = (uint16_t)((which == 1) ? sys->aac_pid1 : sys->aac_pid2);
++        uint8_t *cc = (which == 1) ? &sys->passthrough_cc1 : &sys->passthrough_cc2;
++        if (emit_pes_packets(&sys->out, out_pid, cc, a->buf.p, a->buf.len) != VLC_SUCCESS)
++        {
++            ret = VLC_ENOMEM;
++            goto out;
++        }
++    }
+
+ out:
+     if (ret != VLC_SUCCESS)
+@@ -1619,48 +1685,105 @@ static int process_ts_packet(stream_t *s, stream_sys_t *sys, const uint8_t *pkt)
+
      if (sys->pmt_pid >= 0 && pid == (uint16_t)sys->pmt_pid)
      {
 -        if (pusi && has_payload && payload_len > 0)
@@ -34,24 +206,17 @@ index cdc4ae9211..8a6cd27758 100644
 +            sys->pmt_expected_len = 0;
 +            bytevec_reset(&sys->pmt_section);
 +        }
- 
--            uint8_t pointer = payload[0];
--            if ((size_t)pointer + 1 < payload_len)
++
 +        if (has_payload && payload_len > 0)
 +        {
 +            const uint8_t *section_data = payload;
 +            size_t section_avail = payload_len;
 +
 +            if (pusi)
-             {
--                const uint8_t *sec = payload + 1 + pointer;
--                size_t sec_avail = payload_len - 1 - pointer;
--                if (sec_avail >= 3)
++            {
 +                uint8_t pointer = payload[0];
 +                if ((size_t)pointer + 1 >= payload_len)
-                 {
--                    size_t sec_len = 3 + (((sec[1] & 0x0f) << 8) | sec[2]);
--                    if (sec_len <= sec_avail)
++                {
 +                    if (bytevec_append(&sys->out, pkt, TS_PACKET_SIZE) != VLC_SUCCESS)
 +                        return VLC_ENOMEM;
 +                    return VLC_SUCCESS;
@@ -60,13 +225,20 @@ index cdc4ae9211..8a6cd27758 100644
 +                section_data = payload + 1 + pointer;
 +                section_avail = payload_len - 1 - pointer;
 +            }
-+
+
+-            uint8_t pointer = payload[0];
+-            if ((size_t)pointer + 1 < payload_len)
 +            if (section_avail > 0)
-+            {
+             {
+-                const uint8_t *sec = payload + 1 + pointer;
+-                size_t sec_avail = payload_len - 1 - pointer;
+-                if (sec_avail >= 3)
 +                if (!sys->pmt_collecting)
-+                {
+                 {
+-                    size_t sec_len = 3 + (((sec[1] & 0x0f) << 8) | sec[2]);
+-                    if (sec_len <= sec_avail)
 +                    if (section_avail >= 3)
-+                    {
+                     {
 +                        sys->pmt_expected_len =
 +                            3 + (((section_data[1] & 0x0f) << 8) | section_data[2]);
 +                        if (sys->pmt_expected_len >= 3 && sys->pmt_expected_len <= 1024)
@@ -83,7 +255,26 @@ index cdc4ae9211..8a6cd27758 100644
 +                        return VLC_ENOMEM;
 +
 +                    if (sys->pmt_section.len >= sys->pmt_expected_len)
-                     {
++                    {
++                        if (sys->pmt_expected_len >= 8)
++                        {
++                            const uint8_t *pmt = sys->pmt_section.p;
++                            uint16_t program_number = ((uint16_t)pmt[3] << 8) | pmt[4];
++                            uint8_t version = (pmt[5] >> 1) & 0x1f;
++                            if (sys->have_pmt_identity &&
++                                (sys->pmt_program_number != program_number ||
++                                 sys->pmt_version != version))
++                            {
++                                msg_Dbg(s, "dualmono: PMT changed (program=%u->%u version=%u->%u), reset state",
++                                        sys->pmt_program_number, program_number,
++                                        sys->pmt_version, version);
++                                reset_dualmono_runtime_state(sys);
++                            }
++                            sys->have_pmt_identity = true;
++                            sys->pmt_program_number = program_number;
++                            sys->pmt_version = version;
++                        }
++
                          bytevec_t new_pmt = {0};
 -                        if (rebuild_pmt_section(s, sys, sec, sec_len, &new_pmt) == VLC_SUCCESS)
 +                        int ret = rebuild_pmt_section(s, sys, sys->pmt_section.p,
@@ -131,8 +322,8 @@ index cdc4ae9211..8a6cd27758 100644
 -            return VLC_ENOMEM;
          return VLC_SUCCESS;
      }
- 
-@@ -1785,6 +1825,7 @@ static int Seek(stream_t *s, uint64_t pos)
+
+@@ -1785,14 +1908,18 @@ static int Seek(stream_t *s, uint64_t pos)
      bytevec_reset(&sys->out);
      bytevec_reset(&sys->pes1.buf);
      bytevec_reset(&sys->pes2.buf);
@@ -140,33 +331,43 @@ index cdc4ae9211..8a6cd27758 100644
      sys->pes1.started = false;
      sys->pes2.started = false;
      sys->upstream_eof = false;
-@@ -1792,7 +1833,8 @@ static int Seek(stream_t *s, uint64_t pos)
+     sys->flushed_eof = false;
      sys->pmt_pid = -1;
-     sys->aac_pid1 = -1;
-     sys->aac_pid2 = -1;
+-    sys->aac_pid1 = -1;
+-    sys->aac_pid2 = -1;
 -    sys->drop_pmt_continuation = false;
++    reset_dualmono_runtime_state(sys);
++    sys->have_pmt_identity = false;
++    sys->pmt_program_number = 0;
++    sys->pmt_version = 0;
 +    sys->pmt_collecting = false;
 +    sys->pmt_expected_len = 0;
- 
+
      return VLC_SUCCESS;
  }
-@@ -1821,6 +1863,8 @@ static int Open(vlc_object_t *obj)
+@@ -1821,6 +1948,14 @@ static int Open(vlc_object_t *obj)
      sys->pmt_cc = 0;
      sys->mapped_cc1 = 0;
      sys->mapped_cc2 = 0;
++    sys->passthrough_cc1 = 0;
++    sys->passthrough_cc2 = 0;
++    sys->dualmono_detected = false;
++    sys->have_pmt_identity = false;
++    sys->pmt_program_number = 0;
++    sys->pmt_version = 0;
 +    sys->pmt_collecting = false;
 +    sys->pmt_expected_len = 0;
- 
+
      if (sys->mapped_pid1 == 0 || sys->mapped_pid1 > 0x1ffe ||
          sys->mapped_pid2 == 0 || sys->mapped_pid2 > 0x1ffe ||
-@@ -1850,6 +1894,7 @@ static void Close(vlc_object_t *obj)
+@@ -1850,6 +1985,7 @@ static void Close(vlc_object_t *obj)
      bytevec_clear(&sys->out);
      bytevec_clear(&sys->pes1.buf);
      bytevec_clear(&sys->pes2.buf);
 +    bytevec_clear(&sys->pmt_section);
- 
+
      free(sys);
  }
--- 
+--
 2.39.1
 
