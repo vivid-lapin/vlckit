@@ -19,7 +19,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Build (Partial)
+        if: ${{ github.event_name == 'pull_request' }}
+        run: ./Packaging/create-distributable-package.sh -x -d
+        shell: bash
+      - name: Build (Full)
+        if: ${{ github.event_name != 'pull_request' }}
         run: ./Packaging/create-distributable-package.sh -x -m -d
         shell: bash
       - name: Upload
