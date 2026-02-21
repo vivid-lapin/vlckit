@@ -1,0 +1,30 @@
+From 4946beb04e8bd528a12af17c398c05997f2adb6a Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 21 Feb 2026 14:58:57 +0900
+Subject: [PATCH] fix: Rollback 1
+
+---
+ src/input/es_out.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index a21a30148c..2052866231 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -2052,13 +2052,6 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+ 
+     free( epg.psz_name );
+ 
+-    /* Update now playing */
+-    if( p_epg->b_present && p_pgrm->p_meta &&
+-       ( p_epg->p_current || p_epg->i_event == 0 ) )
+-    {
+-        vlc_meta_SetNowPlaying( p_pgrm->p_meta, NULL );
+-    }
+-
+     const vlc_epg_event_t *p_current = NULL;
+     vlc_mutex_lock( &p_item->lock );
+     if( p_item->p_epg_table != NULL &&
+-- 
+2.39.1
+
