@@ -1,0 +1,29 @@
+From 73d4c9b512dafe420b7f9260da5c29a91ee98e90 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 21 Feb 2026 15:21:46 +0900
+Subject: [PATCH] fix: Rollback 2
+
+---
+ src/input/es_out.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index 2052866231..348eede3ff 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -1639,8 +1639,10 @@ static void EsOutProgramSelect(es_out_sys_t *p_sys, es_out_pgrm_t *p_pgrm)
+     /* Update now playing */
+     if( p_pgrm->p_meta )
+     {
+-        input_item_SetESNowPlaying( input_priv(p_input)->p_item,
+-                                    vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying ) );
++        const char *psz_nowplaying = vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying );
++
++        input_item_SetESNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
++        input_item_SetNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
+         input_item_SetPublisher( input_priv(p_input)->p_item,
+                                  vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Publisher ) );
+         input_item_SetTitle( input_priv(p_input)->p_item,
+-- 
+2.39.1
+
