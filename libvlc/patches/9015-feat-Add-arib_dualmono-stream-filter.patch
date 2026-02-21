@@ -1,11 +1,11 @@
-From 8457bc006fad0686cda0e4ce2825653a4fa3f56f Mon Sep 17 00:00:00 2001
+From dcb63fe38820bdd6b84cbd9d63373498db6d9446 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 21 Feb 2026 21:23:20 +0900
 Subject: [PATCH] feat: Add arib_dualmono stream filter
 
 ---
  modules/stream_filter/Makefile.am             |   9 +
- .../arib_dualmono/arib_dualmono.cpp           | 204 ++++
+ .../arib_dualmono/arib_dualmono.cpp           | 209 ++++
  .../arib_dualmono/tsreadex/License.txt        |  21 +
  .../arib_dualmono/tsreadex/aac.cpp            | 816 ++++++++++++++
  .../arib_dualmono/tsreadex/aac.hpp            |  18 +
@@ -16,7 +16,7 @@ Subject: [PATCH] feat: Add arib_dualmono stream filter
  .../arib_dualmono/tsreadex/util.cpp           | 160 +++
  .../arib_dualmono/tsreadex/util.hpp           |  67 ++
  modules/stream_filter/meson.build             |  12 +
- 12 files changed, 2799 insertions(+)
+ 12 files changed, 2804 insertions(+)
  create mode 100644 modules/stream_filter/arib_dualmono/arib_dualmono.cpp
  create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/License.txt
  create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/aac.cpp
@@ -33,7 +33,7 @@ index 1d6a5499b2..9d964dc5e3 100644
 --- a/modules/stream_filter/Makefile.am
 +++ b/modules/stream_filter/Makefile.am
 @@ -46,3 +46,12 @@ stream_filter_LTLIBRARIES += libadf_plugin.la
- 
+
  libskiptags_plugin_la_SOURCES = stream_filter/skiptags.c
  stream_filter_LTLIBRARIES += libskiptags_plugin.la
 +
@@ -47,10 +47,10 @@ index 1d6a5499b2..9d964dc5e3 100644
 +stream_filter_LTLIBRARIES += libarib_dualmono_plugin.la
 diff --git a/modules/stream_filter/arib_dualmono/arib_dualmono.cpp b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
 new file mode 100644
-index 0000000000..93c5fe3b56
+index 0000000000..bf7301d574
 --- /dev/null
 +++ b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,209 @@
 +/*****************************************************************************
 + * arib_dualmono.cpp : ARIB DualMono audio separator stream filter
 + *****************************************************************************/
@@ -235,8 +235,13 @@ index 0000000000..93c5fe3b56
 +        return VLC_ENOMEM;
 +    }
 +
++    // Process the first program found in PAT instead of skipping (passthrough mode)
++    p_sys->p_filter->SetProgramNumberOrIndex(-1);
++
 +    // Set audio1 mode to 8 (+8 activates TransmuxDualMono in tsreadex logic)
 +    p_sys->p_filter->SetAudio1Mode(8);
++
++    msg_Dbg(p_stream, "ARIB DualMono filter initialized (tsreadex processing enabled)");
 +
 +    p_stream->p_sys = p_sys;
 +    p_stream->pf_read = Read;
@@ -2903,6 +2908,6 @@ index 9f9ae2cd80..e3f26bcb19 100644
 +    ),
 +    'cpp_args' : ['-std=c++14']
 +}
--- 
+--
 2.39.1
 
