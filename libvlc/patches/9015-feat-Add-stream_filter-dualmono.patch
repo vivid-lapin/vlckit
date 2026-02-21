@@ -1,14 +1,14 @@
-From ad08de0e8198f4f6890ad7667c9b63f1a5d1476c Mon Sep 17 00:00:00 2001
+From 8921db75fcf33590967a1bc7d8a6c530b4de6857 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Feb 2026 02:13:47 +0900
 Subject: [PATCH] feat: Add stream_filter/dualmono
 
 ---
  modules/stream_filter/Makefile.am           |    3 +
- modules/stream_filter/dualmono.c            | 2140 +++++++++++++++++++
- modules/stream_filter/dualmono_aac_tables.h | 1451 +++++++++++++
+ modules/stream_filter/dualmono.c            | 2269 +++++++++++++++++++
+ modules/stream_filter/dualmono_aac_tables.h | 1451 ++++++++++++
  modules/stream_filter/meson.build           |    5 +
- 4 files changed, 3599 insertions(+)
+ 4 files changed, 3728 insertions(+)
  create mode 100644 modules/stream_filter/dualmono.c
  create mode 100644 modules/stream_filter/dualmono_aac_tables.h
 
@@ -25,10 +25,10 @@ index 1d6a5499b2..d9c9ad7984 100644
 +stream_filter_LTLIBRARIES += libdualmono_plugin.la
 diff --git a/modules/stream_filter/dualmono.c b/modules/stream_filter/dualmono.c
 new file mode 100644
-index 0000000000..9afed89297
+index 0000000000..93a97422e0
 --- /dev/null
 +++ b/modules/stream_filter/dualmono.c
-@@ -0,0 +1,2140 @@
+@@ -0,0 +1,2269 @@
 +/**
 +MIT License
 +
@@ -195,12 +195,20 @@ index 0000000000..9afed89297
 +    bool pmt_collecting;
 +    size_t pmt_expected_len;
 +    bytevec_t pmt_section;
++    bytevec_t last_pmt_raw;
++    bool have_last_pmt_raw;
++    bool out_pmt_state_valid;
++    uint16_t out_pmt_program;
++    uint8_t out_pmt_source_version;
++    bool out_pmt_dualmono_mode;
++    uint8_t out_pmt_version;
 +
 +    pes_assembler_t pes1;
 +    pes_assembler_t pes2;
 +} stream_sys_t;
 +
 +static void bytevec_reset(bytevec_t *v);
++static uint32_t psi_crc32(const uint8_t *data, size_t len);
 +
 +static void reset_dualmono_runtime_state(stream_sys_t *sys)
 +{
@@ -223,6 +231,60 @@ index 0000000000..9afed89297
 +    sys->pes2.have_first_cc = false;
 +    bytevec_reset(&sys->pes1.buf);
 +    bytevec_reset(&sys->pes2.buf);
++}
++
++static bool pmt_get_identity(const uint8_t *section, size_t len,
++                             uint16_t *program_number, uint8_t *version)
++{
++    if (len < 8 || section[0] != 0x02)
++        return false;
++    *program_number = ((uint16_t)section[3] << 8) | section[4];
++    *version = (section[5] >> 1) & 0x1f;
++    return true;
++}
++
++static int pmt_set_version_and_crc(bytevec_t *section, uint8_t version)
++{
++    if (section->len < 12 || section->p[0] != 0x02)
++        return VLC_EGENERIC;
++
++    section->p[5] = (section->p[5] & 0xc1) | ((version & 0x1f) << 1);
++
++    uint32_t crc = psi_crc32(section->p, section->len - 4);
++    section->p[section->len - 4] = (uint8_t)(crc >> 24);
++    section->p[section->len - 3] = (uint8_t)(crc >> 16);
++    section->p[section->len - 2] = (uint8_t)(crc >> 8);
++    section->p[section->len - 1] = (uint8_t)crc;
++    return VLC_SUCCESS;
++}
++
++static uint8_t pmt_choose_output_version(stream_sys_t *sys,
++                                         uint16_t program_number,
++                                         uint8_t source_version,
++                                         bool dualmono_mode)
++{
++    if (!sys->out_pmt_state_valid)
++    {
++        sys->out_pmt_state_valid = true;
++        sys->out_pmt_program = program_number;
++        sys->out_pmt_source_version = source_version;
++        sys->out_pmt_dualmono_mode = dualmono_mode;
++        sys->out_pmt_version = source_version;
++        return sys->out_pmt_version;
++    }
++
++    if (sys->out_pmt_program == program_number &&
++        sys->out_pmt_source_version == source_version &&
++        sys->out_pmt_dualmono_mode == dualmono_mode)
++    {
++        return sys->out_pmt_version;
++    }
++
++    sys->out_pmt_program = program_number;
++    sys->out_pmt_source_version = source_version;
++    sys->out_pmt_dualmono_mode = dualmono_mode;
++    sys->out_pmt_version = (sys->out_pmt_version + 1) & 0x1f;
++    return sys->out_pmt_version;
 +}
 +
 +static bool is_likely_mpegts(stream_t *s)
@@ -1594,6 +1656,47 @@ index 0000000000..9afed89297
 +    return VLC_SUCCESS;
 +}
 +
++static int emit_rebuilt_pmt(stream_t *s, stream_sys_t *sys,
++                            const uint8_t *orig, size_t orig_len,
++                            const char *reason)
++{
++    bytevec_t new_pmt = {0};
++    bool modified = false;
++    int ret = rebuild_pmt_section(s, sys, orig, orig_len, &new_pmt, &modified);
++    if (ret != VLC_SUCCESS)
++    {
++        msg_Warn(s, "dualmono: PMT rewrite failed (%s), forwarding original PMT section", reason);
++        return emit_psi_section(&sys->out, (uint16_t)sys->pmt_pid, &sys->pmt_cc, orig, orig_len);
++    }
++
++    uint16_t program_number = 0;
++    uint8_t source_version = 0;
++    if (pmt_get_identity(orig, orig_len, &program_number, &source_version))
++    {
++        bool dualmono_mode = (sys->dualmono_detected && sys->aac_pid2 < 0);
++        uint8_t out_version = pmt_choose_output_version(sys, program_number, source_version, dualmono_mode);
++        if (pmt_set_version_and_crc(&new_pmt, out_version) != VLC_SUCCESS)
++        {
++            bytevec_clear(&new_pmt);
++            return VLC_EGENERIC;
++        }
++    }
++
++    if (modified)
++        msg_Dbg(s, "dualmono: PMT section rewritten (%s, len=%zu)", reason, new_pmt.len);
++
++    ret = emit_psi_section(&sys->out, (uint16_t)sys->pmt_pid, &sys->pmt_cc, new_pmt.p, new_pmt.len);
++    bytevec_clear(&new_pmt);
++    return ret;
++}
++
++static int emit_cached_pmt_after_mode_change(stream_t *s, stream_sys_t *sys, const char *reason)
++{
++    if (sys->pmt_pid < 0 || !sys->have_last_pmt_raw || sys->last_pmt_raw.len == 0)
++        return VLC_SUCCESS;
++    return emit_rebuilt_pmt(s, sys, sys->last_pmt_raw.p, sys->last_pmt_raw.len, reason);
++}
++
 +static int rewrite_pes_payload(const uint8_t *pes, size_t pes_len,
 +                               bytevec_t *main_pes, bytevec_t *sub_pes)
 +{
@@ -1669,7 +1772,8 @@ index 0000000000..9afed89297
 +}
 +
 +static int process_completed_pes(stream_t *s, stream_sys_t *sys,
-+                                 int which, bool allow_sub)
++                                 int which, bool allow_sub,
++                                 bool emit_when_not_detected)
 +{
 +    pes_assembler_t *a = (which == 1) ? &sys->pes1 : &sys->pes2;
 +    if (!a->started || a->buf.len == 0)
@@ -1699,6 +1803,15 @@ index 0000000000..9afed89297
 +        sys->dualmono_detected = true;
 +        sys->dualmono_no_sub_pes = 0;
 +        msg_Dbg(s, "dualmono detected on AAC PID %d", sys->aac_pid1);
++
++        if (emit_cached_pmt_after_mode_change(s, sys, "detected") != VLC_SUCCESS)
++        {
++            ret = VLC_ENOMEM;
++            goto out;
++        }
++
++        if (!emit_when_not_detected)
++            goto out;
 +
 +        if (!sys->passthrough_cc1_seeded && a->have_first_cc)
 +        {
@@ -1763,11 +1876,19 @@ index 0000000000..9afed89297
 +                sys->dualmono_no_sub_pes = 0;
 +                msg_Dbg(s, "dualmono: no sub stream for %u PES, disable dualmono mode",
 +                        DM_DUALMONO_HOLD_PES);
++                if (emit_cached_pmt_after_mode_change(s, sys, "disabled") != VLC_SUCCESS)
++                {
++                    ret = VLC_ENOMEM;
++                    goto out;
++                }
 +            }
 +        }
 +    }
 +    else
 +    {
++        if (!emit_when_not_detected)
++            goto out;
++
 +        uint16_t out_pid = (uint16_t)((which == 1) ? sys->aac_pid1 : sys->aac_pid2);
 +        uint8_t *cc = (which == 1) ? &sys->passthrough_cc1 : &sys->passthrough_cc2;
 +        bool *seeded = (which == 1) ? &sys->passthrough_cc1_seeded : &sys->passthrough_cc2_seeded;
@@ -1918,32 +2039,16 @@ index 0000000000..9afed89297
 +                            sys->pmt_version = version;
 +                        }
 +
-+                        bytevec_t new_pmt = {0};
-+                        bool modified = false;
-+                        int ret = rebuild_pmt_section(s, sys, sys->pmt_section.p,
-+                                                      sys->pmt_expected_len, &new_pmt, &modified);
-+                        if (ret == VLC_SUCCESS)
-+                        {
-+                            if (modified)
-+                                msg_Dbg(s, "dualmono: PMT section rewritten (len=%zu)", new_pmt.len);
-+                            if (emit_psi_section(&sys->out, pid, &sys->pmt_cc,
-+                                                 new_pmt.p, new_pmt.len) != VLC_SUCCESS)
-+                            {
-+                                bytevec_clear(&new_pmt);
-+                                return VLC_ENOMEM;
-+                            }
-+                        }
-+                        else
-+                        {
-+                            msg_Warn(s, "dualmono: PMT rewrite failed, forwarding original PMT section");
-+                            if (emit_psi_section(&sys->out, pid, &sys->pmt_cc,
-+                                                 sys->pmt_section.p, sys->pmt_expected_len) != VLC_SUCCESS)
-+                            {
-+                                bytevec_clear(&new_pmt);
-+                                return VLC_ENOMEM;
-+                            }
-+                        }
-+                        bytevec_clear(&new_pmt);
++                        bytevec_reset(&sys->last_pmt_raw);
++                        if (bytevec_append(&sys->last_pmt_raw, sys->pmt_section.p,
++                                           sys->pmt_expected_len) != VLC_SUCCESS)
++                            return VLC_ENOMEM;
++                        sys->have_last_pmt_raw = true;
++
++                        if (emit_rebuilt_pmt(s, sys, sys->pmt_section.p,
++                                             sys->pmt_expected_len, "incoming") != VLC_SUCCESS)
++                            return VLC_ENOMEM;
++
 +                        sys->pmt_collecting = false;
 +                        sys->pmt_expected_len = 0;
 +                        bytevec_reset(&sys->pmt_section);
@@ -1956,9 +2061,12 @@ index 0000000000..9afed89297
 +
 +    if (sys->aac_pid1 >= 0 && pid == (uint16_t)sys->aac_pid1)
 +    {
++        bool was_dualmono = sys->dualmono_detected;
++
 +        if (pusi)
 +        {
-+            if (process_completed_pes(s, sys, 1, sys->aac_pid2 < 0) != VLC_SUCCESS)
++            if (process_completed_pes(s, sys, 1, sys->aac_pid2 < 0,
++                                      was_dualmono) != VLC_SUCCESS)
 +                return VLC_EGENERIC;
 +            sys->pes1.started = true;
 +            sys->pes1.first_cc = pkt[3] & 0x0f;
@@ -1971,14 +2079,23 @@ index 0000000000..9afed89297
 +            if (bytevec_append(&sys->pes1.buf, payload, payload_len) != VLC_SUCCESS)
 +                return VLC_ENOMEM;
 +        }
++
++        if (!was_dualmono && !sys->dualmono_detected)
++        {
++            if (bytevec_append(&sys->out, pkt, TS_PACKET_SIZE) != VLC_SUCCESS)
++                return VLC_ENOMEM;
++        }
 +        return VLC_SUCCESS;
 +    }
 +
 +    if (sys->aac_pid2 >= 0 && pid == (uint16_t)sys->aac_pid2)
 +    {
++        bool was_dualmono = sys->dualmono_detected;
++
 +        if (pusi)
 +        {
-+            if (process_completed_pes(s, sys, 2, false) != VLC_SUCCESS)
++            if (process_completed_pes(s, sys, 2, false,
++                                      was_dualmono) != VLC_SUCCESS)
 +                return VLC_EGENERIC;
 +            sys->pes2.started = true;
 +            sys->pes2.first_cc = pkt[3] & 0x0f;
@@ -1989,6 +2106,12 @@ index 0000000000..9afed89297
 +        if (sys->pes2.started && has_payload && payload_len > 0)
 +        {
 +            if (bytevec_append(&sys->pes2.buf, payload, payload_len) != VLC_SUCCESS)
++                return VLC_ENOMEM;
++        }
++
++        if (!was_dualmono && !sys->dualmono_detected)
++        {
++            if (bytevec_append(&sys->out, pkt, TS_PACKET_SIZE) != VLC_SUCCESS)
 +                return VLC_ENOMEM;
 +        }
 +        return VLC_SUCCESS;
@@ -2051,9 +2174,9 @@ index 0000000000..9afed89297
 +
 +    if (sys->upstream_eof && !sys->flushed_eof)
 +    {
-+        if (process_completed_pes(s, sys, 1, sys->aac_pid2 < 0) != VLC_SUCCESS)
++        if (process_completed_pes(s, sys, 1, sys->aac_pid2 < 0, true) != VLC_SUCCESS)
 +            return -1;
-+        if (process_completed_pes(s, sys, 2, false) != VLC_SUCCESS)
++        if (process_completed_pes(s, sys, 2, false, true) != VLC_SUCCESS)
 +            return -1;
 +        sys->flushed_eof = true;
 +    }
@@ -2095,6 +2218,9 @@ index 0000000000..9afed89297
 +    sys->pmt_version = 0;
 +    sys->pmt_collecting = false;
 +    sys->pmt_expected_len = 0;
++    sys->have_last_pmt_raw = false;
++    bytevec_reset(&sys->last_pmt_raw);
++    sys->out_pmt_state_valid = false;
 +
 +    return VLC_SUCCESS;
 +}
@@ -2136,6 +2262,8 @@ index 0000000000..9afed89297
 +    sys->pmt_version = 0;
 +    sys->pmt_collecting = false;
 +    sys->pmt_expected_len = 0;
++    sys->have_last_pmt_raw = false;
++    sys->out_pmt_state_valid = false;
 +
 +    if (sys->mapped_pid1 == 0 || sys->mapped_pid1 > 0x1ffe ||
 +        sys->mapped_pid2 == 0 || sys->mapped_pid2 > 0x1ffe ||
@@ -2166,6 +2294,7 @@ index 0000000000..9afed89297
 +    bytevec_clear(&sys->pes1.buf);
 +    bytevec_clear(&sys->pes2.buf);
 +    bytevec_clear(&sys->pmt_section);
++    bytevec_clear(&sys->last_pmt_raw);
 +
 +    free(sys);
 +}
