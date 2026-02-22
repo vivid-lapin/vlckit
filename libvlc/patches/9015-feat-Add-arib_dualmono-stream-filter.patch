@@ -1,0 +1,2913 @@
+From 3bddf199d31d9e8782b4edfc431b7fc1f00de83a Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 21 Feb 2026 21:23:20 +0900
+Subject: [PATCH] feat: Add arib_dualmono stream filter
+
+---
+ modules/stream_filter/Makefile.am             |   9 +
+ .../arib_dualmono/arib_dualmono.cpp           | 209 ++++
+ .../arib_dualmono/tsreadex/License.txt        |  21 +
+ .../arib_dualmono/tsreadex/aac.cpp            | 816 ++++++++++++++
+ .../arib_dualmono/tsreadex/aac.hpp            |  18 +
+ .../arib_dualmono/tsreadex/huffman.cpp        | 386 +++++++
+ .../arib_dualmono/tsreadex/huffman.hpp        |  18 +
+ .../arib_dualmono/tsreadex/servicefilter.cpp  | 991 ++++++++++++++++++
+ .../arib_dualmono/tsreadex/servicefilter.hpp  |  97 ++
+ .../arib_dualmono/tsreadex/util.cpp           | 160 +++
+ .../arib_dualmono/tsreadex/util.hpp           |  67 ++
+ modules/stream_filter/meson.build             |  12 +
+ 12 files changed, 2804 insertions(+)
+ create mode 100644 modules/stream_filter/arib_dualmono/arib_dualmono.cpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/License.txt
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/aac.cpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/aac.hpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/huffman.cpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/huffman.hpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/servicefilter.cpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/servicefilter.hpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/util.cpp
+ create mode 100644 modules/stream_filter/arib_dualmono/tsreadex/util.hpp
+
+diff --git a/modules/stream_filter/Makefile.am b/modules/stream_filter/Makefile.am
+index 1d6a5499b2..9d964dc5e3 100644
+--- a/modules/stream_filter/Makefile.am
++++ b/modules/stream_filter/Makefile.am
+@@ -46,3 +46,12 @@ stream_filter_LTLIBRARIES += libadf_plugin.la
+
+ libskiptags_plugin_la_SOURCES = stream_filter/skiptags.c
+ stream_filter_LTLIBRARIES += libskiptags_plugin.la
++
++libarib_dualmono_plugin_la_SOURCES = \
++	stream_filter/arib_dualmono/arib_dualmono.cpp \
++	stream_filter/arib_dualmono/tsreadex/servicefilter.cpp \
++	stream_filter/arib_dualmono/tsreadex/aac.cpp \
++	stream_filter/arib_dualmono/tsreadex/huffman.cpp \
++	stream_filter/arib_dualmono/tsreadex/util.cpp
++libarib_dualmono_plugin_la_CXXFLAGS = $(AM_CXXFLAGS) -std=c++14
++stream_filter_LTLIBRARIES += libarib_dualmono_plugin.la
+diff --git a/modules/stream_filter/arib_dualmono/arib_dualmono.cpp b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
+new file mode 100644
+index 0000000000..bf7301d574
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
+@@ -0,0 +1,209 @@
++/*****************************************************************************
++ * arib_dualmono.cpp : ARIB DualMono audio separator stream filter
++ *****************************************************************************/
++
++#ifdef HAVE_CONFIG_H
++# include "config.h"
++#endif
++
++#include <vlc_common.h>
++#include <vlc_plugin.h>
++#include <vlc_stream.h>
++#include <vlc_block.h>
++
++#include "tsreadex/servicefilter.hpp"
++
++#include <new>
++
++struct stream_sys_t
++{
++    CServiceFilter *p_filter;
++    block_t        *p_list;
++    uint8_t         ts_buf[188];
++    int             i_ts_buf;
++};
++
++static int  Open(vlc_object_t *);
++static void Close(vlc_object_t *);
++
++vlc_module_begin ()
++    set_subcategory(SUBCAT_INPUT_STREAM_FILTER)
++    set_capability("stream_filter", 0)
++    add_shortcut("arib_dualmono")
++    set_description(N_("ARIB DualMono audio separator stream filter"))
++    set_callbacks(Open, Close)
++vlc_module_end ()
++
++static size_t RemainRead(stream_t *p_stream, uint8_t *p_data, size_t i_toread)
++{
++    stream_sys_t *p_sys = (stream_sys_t*)p_stream->p_sys;
++    size_t i_total = 0;
++
++    while (p_sys->p_list && i_toread)
++    {
++        size_t i_copy = __MIN(i_toread, p_sys->p_list->i_buffer);
++        memcpy(p_data, p_sys->p_list->p_buffer, i_copy);
++
++        i_toread -= i_copy;
++        i_total += i_copy;
++        p_data += i_copy;
++
++        p_sys->p_list->i_buffer -= i_copy;
++        p_sys->p_list->p_buffer += i_copy;
++
++        if (p_sys->p_list->i_buffer == 0)
++        {
++            block_t *p_prevhead = p_sys->p_list;
++            p_sys->p_list = p_sys->p_list->p_next;
++            block_Release(p_prevhead);
++        }
++    }
++    return i_total;
++}
++
++static bool RemainAdd(stream_t *p_stream, const uint8_t *p_data, size_t i_size)
++{
++    stream_sys_t *p_sys = (stream_sys_t*)p_stream->p_sys;
++    if (i_size == 0) return true;
++    block_t *p_block = block_Alloc(i_size);
++    if (!p_block) return false;
++    memcpy(p_block->p_buffer, p_data, i_size);
++    p_block->i_buffer = i_size;
++    block_ChainAppend(&p_sys->p_list, p_block);
++    return true;
++}
++
++static void RemainFlush(stream_sys_t *p_sys)
++{
++    block_ChainRelease(p_sys->p_list);
++    p_sys->p_list = NULL;
++}
++
++static ssize_t Read(stream_t *p_stream, void *p_buf, size_t i_toread)
++{
++    stream_sys_t *p_sys = (stream_sys_t*)p_stream->p_sys;
++    uint8_t *p_dst = (uint8_t*)p_buf;
++    size_t i_total_read = 0;
++
++    if (!i_toread) return -1;
++
++    size_t i_fromremain = RemainRead(p_stream, p_dst, i_toread);
++    i_total_read += i_fromremain;
++    p_dst += i_fromremain;
++    i_toread -= i_fromremain;
++
++    uint8_t read_buf[32768];
++
++    while (i_toread)
++    {
++        int i_srcread = vlc_stream_Read(p_stream->s, read_buf, sizeof(read_buf));
++        if (i_srcread <= 0) break;
++
++        int offset = 0;
++        while (offset < i_srcread)
++        {
++            int piece = __MIN((int)(188 - p_sys->i_ts_buf), i_srcread - offset);
++            memcpy(p_sys->ts_buf + p_sys->i_ts_buf, read_buf + offset, piece);
++            p_sys->i_ts_buf += piece;
++            offset += piece;
++
++            if (p_sys->i_ts_buf == 188)
++            {
++                if (p_sys->ts_buf[0] != 0x47) {
++                    msg_Warn(p_stream, "Loss of TS sync");
++                    int i_sync = 1;
++                    while (i_sync < 188 && p_sys->ts_buf[i_sync] != 0x47) i_sync++;
++                    int remain = 188 - i_sync;
++                    if (remain > 0) memmove(p_sys->ts_buf, p_sys->ts_buf + i_sync, remain);
++                    p_sys->i_ts_buf = remain;
++                    continue;
++                }
++
++                p_sys->p_filter->AddPacket(p_sys->ts_buf);
++                p_sys->i_ts_buf = 0;
++            }
++        }
++
++        const auto& packets = p_sys->p_filter->GetPackets();
++        if (!packets.empty())
++        {
++            size_t gen_size = packets.size();
++            size_t gen_copy = __MIN(gen_size, i_toread);
++            memcpy(p_dst, packets.data(), gen_copy);
++
++            i_total_read += gen_copy;
++            p_dst += gen_copy;
++            i_toread -= gen_copy;
++
++            if (gen_size > gen_copy) {
++                RemainAdd(p_stream, packets.data() + gen_copy, gen_size - gen_copy);
++            }
++            p_sys->p_filter->ClearPackets();
++        }
++    }
++
++    return i_total_read > 0 ? i_total_read : 0;
++}
++
++static int Seek(stream_t *p_stream, uint64_t i_pos)
++{
++    int i_ret = vlc_stream_Seek(p_stream->s, i_pos);
++    if (i_ret == VLC_SUCCESS)
++    {
++        stream_sys_t *p_sys = (stream_sys_t*)p_stream->p_sys;
++        RemainFlush(p_sys);
++        p_sys->i_ts_buf = 0;
++        p_sys->p_filter->ClearPackets();
++    }
++    return i_ret;
++}
++
++static int Control(stream_t *p_stream, int i_query, va_list args)
++{
++    return vlc_stream_vaControl(p_stream->s, i_query, args);
++}
++
++static int Open(vlc_object_t *p_object)
++{
++    stream_t *p_stream = (stream_t *)p_object;
++
++    // Optional: Only apply to streams that look like TS
++    // (If probing data is small, could just proceed and let it fail gracefully)
++    // For now we assume if forced/matched, we apply the filter.
++
++    stream_sys_t *p_sys = (stream_sys_t*)calloc(1, sizeof(*p_sys));
++    if (p_sys == NULL)
++        return VLC_ENOMEM;
++
++    p_sys->p_filter = new (std::nothrow) CServiceFilter();
++    if (!p_sys->p_filter)
++    {
++        free(p_sys);
++        return VLC_ENOMEM;
++    }
++
++    // Process the first program found in PAT instead of skipping (passthrough mode)
++    p_sys->p_filter->SetProgramNumberOrIndex(-1);
++
++    // Set audio1 mode to 8 (+8 activates TransmuxDualMono in tsreadex logic)
++    p_sys->p_filter->SetAudio1Mode(8);
++
++    msg_Dbg(p_stream, "ARIB DualMono filter initialized (tsreadex processing enabled)");
++
++    p_stream->p_sys = p_sys;
++    p_stream->pf_read = Read;
++    p_stream->pf_seek = Seek;
++    p_stream->pf_control = Control;
++
++    return VLC_SUCCESS;
++}
++
++static void Close(vlc_object_t *p_object)
++{
++    stream_t *p_stream = (stream_t *)p_object;
++    stream_sys_t *p_sys = (stream_sys_t*)p_stream->p_sys;
++
++    RemainFlush(p_sys);
++    delete p_sys->p_filter;
++    free(p_sys);
++}
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/License.txt b/modules/stream_filter/arib_dualmono/tsreadex/License.txt
+new file mode 100644
+index 0000000000..a50b9f9048
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/License.txt
+@@ -0,0 +1,21 @@
++The MIT License
++
++Copyright (c) 2021 xtne6f
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/aac.cpp b/modules/stream_filter/arib_dualmono/tsreadex/aac.cpp
+new file mode 100644
+index 0000000000..bdaf9e4006
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/aac.cpp
+@@ -0,0 +1,816 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#include "aac.hpp"
++#include "huffman.hpp"
++#include "util.hpp"
++#include <assert.h>
++#include <algorithm>
++
++namespace
++{
++const int ONLY_LONG_SEQUENCE = 0;
++const int LONG_START_SEQUENCE = 1;
++const int EIGHT_SHORT_SEQUENCE = 2;
++const int LONG_STOP_SEQUENCE = 3;
++
++const uint16_t SWB_OFFSET_LONG_WINDOW_48KHZ[64] =
++{
++    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108, 120, 132, 144, 160, 176, 196,
++    216, 240, 264, 292, 320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 1024,
++    // padding
++    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
++};
++
++const uint16_t SWB_OFFSET_LONG_WINDOW_32KHZ[64] =
++{
++    0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108, 120, 132, 144, 160, 176, 196, 216,
++    240, 264, 292, 320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992, 1024,
++    // padding
++    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024,
++};
++
++const uint16_t SWB_OFFSET_SHORT_WINDOW_48KHZ[16] =
++{
++    0, 4, 8, 12, 16, 20, 28, 36, 44, 56, 68, 80, 96, 112, 128,
++    // padding
++    128,
++};
++
++const int PRED_SFB_MAX_48KHZ = 40;
++
++const int ZERO_HCB = 0;
++const int FIRST_PAIR_HCB = 5;
++const int ESC_HCB = 11;
++
++const int ESC_FLAG = 16;
++
++const int EXT_DYNAMIC_RANGE = 11;
++const int EXT_SBR_DATA = 13;
++const int EXT_SBR_DATA_CRC = 14;
++
++const int ID_SCE = 0;
++const int ID_CPE = 1;
++const int ID_DSE = 4;
++const int ID_PCE = 5;
++const int ID_FIL = 6;
++const int ID_END = 7;
++
++const size_t EXTRA_WORKSPACE_BYTES = 16;
++
++inline bool CheckOverrun(size_t lenBytes, size_t pos)
++{
++    assert(pos <= lenBytes * 8);
++    return pos <= lenBytes * 8;
++}
++
++void ByteAlignment(size_t &pos)
++{
++    pos = (pos + 7) / 8 * 8;
++}
++
++bool SingleChannelElement(const uint8_t *aac, size_t lenBytes, size_t &pos, bool is32khz)
++{
++    pos += 4;
++
++    // individual_channel_stream(0)
++    pos += 8;
++
++    // ics_info
++    ++pos;
++    int windowSequence = read_bits(aac, pos, 2);
++    ++pos;
++    int maxSfb;
++    int numWindowGroups = 1;
++    int windowGroupLength[8];
++    windowGroupLength[0] = 1;
++    if (windowSequence == EIGHT_SHORT_SEQUENCE) {
++        maxSfb = read_bits(aac, pos, 4);
++        int scaleFactorGrouping = read_bits(aac, pos, 7);
++        for (int i = 6; i >= 0; --i) {
++            if ((scaleFactorGrouping >> i) & 1) {
++                ++windowGroupLength[numWindowGroups - 1];
++            }
++            else {
++                windowGroupLength[numWindowGroups++] = 1;
++            }
++        }
++    }
++    else {
++        maxSfb = read_bits(aac, pos, 6);
++        bool predictorDataPresent = read_bool(aac, pos);
++        if (predictorDataPresent) {
++            bool predictorReset = read_bool(aac, pos);
++            if (predictorReset) {
++                pos += 5;
++            }
++            pos += std::min(maxSfb, PRED_SFB_MAX_48KHZ);
++        }
++    }
++
++    // Determine sect_sfb_offset
++    int numWindows;
++    int sectSfbOffset[8][64];
++    if (windowSequence == EIGHT_SHORT_SEQUENCE) {
++        numWindows = 8;
++        for (int g = 0; g < numWindowGroups; ++g) {
++            int offset = 0;
++            for (int i = 0; i < maxSfb; ++i) {
++                sectSfbOffset[g][i] = offset;
++                offset += (SWB_OFFSET_SHORT_WINDOW_48KHZ[i + 1] - SWB_OFFSET_SHORT_WINDOW_48KHZ[i]) * windowGroupLength[g];
++            }
++            sectSfbOffset[g][maxSfb] = offset;
++        }
++    }
++    else {
++        numWindows = 1;
++        if (is32khz) {
++            std::copy(SWB_OFFSET_LONG_WINDOW_32KHZ, SWB_OFFSET_LONG_WINDOW_32KHZ + maxSfb + 1, sectSfbOffset[0]);
++        }
++        else {
++            std::copy(SWB_OFFSET_LONG_WINDOW_48KHZ, SWB_OFFSET_LONG_WINDOW_48KHZ + maxSfb + 1, sectSfbOffset[0]);
++        }
++    }
++
++    // section_data
++    int numSec[8];
++    int sectCb[8][64];
++    int sectEnd[8][64];
++    int sfbCb[8][64];
++    for (int g = 0; g < numWindowGroups; ++g) {
++        int sectLenIncrBits = windowSequence == EIGHT_SHORT_SEQUENCE ? 3 : 5;
++        int sectEscVal = windowSequence == EIGHT_SHORT_SEQUENCE ? 7 : 31;
++        int i = 0;
++        for (int k = 0; k < maxSfb; ++i) {
++            if (!CheckOverrun(lenBytes, pos)) {
++                return false;
++            }
++            sectCb[g][i] = read_bits(aac, pos, 4);
++            int sectLen = 0;
++            for (;;) {
++                if (!CheckOverrun(lenBytes, pos)) {
++                    return false;
++                }
++                int sectLenIncr = read_bits(aac, pos, sectLenIncrBits);
++                sectLen += sectLenIncr;
++                if (k + sectLen > maxSfb) {
++                    assert(false);
++                    return false;
++                }
++                if (sectLenIncr != sectEscVal) {
++                    break;
++                }
++            }
++            for (int sfb = k; sfb < k + sectLen; ++sfb) {
++                sfbCb[g][sfb] = sectCb[g][i];
++            }
++            k += sectLen;
++            sectEnd[g][i] = k;
++        }
++        numSec[g] = i;
++    }
++
++    // scale_factor_data (ISO/IEC 14496-3 extended)
++    bool noisePcmFlag = true;
++    for (int g = 0; g < numWindowGroups; ++g) {
++        for (int sfb = 0; sfb < maxSfb; ++sfb) {
++            if (sfbCb[g][sfb] != ZERO_HCB) {
++                if (!CheckOverrun(lenBytes, pos)) {
++                    return false;
++                }
++                if (sfbCb[g][sfb] == 13 && noisePcmFlag) {
++                    noisePcmFlag = false;
++                    pos += 9;
++                }
++                else {
++                    Huffman::DecodeScalefactorBits(aac, pos);
++                }
++            }
++        }
++    }
++
++    if (!CheckOverrun(lenBytes, pos)) {
++        return false;
++    }
++    bool pulseDataPresent = read_bool(aac, pos);
++    if (pulseDataPresent) {
++        // pulse_data
++        int numberPulse = read_bits(aac, pos, 2);
++        pos += 6 + 9 * (numberPulse + 1);
++    }
++
++    if (!CheckOverrun(lenBytes, pos)) {
++        return false;
++    }
++    bool tnsDataPresent = read_bool(aac, pos);
++    if (tnsDataPresent) {
++        // tns_data
++        int nFiltBits = windowSequence == EIGHT_SHORT_SEQUENCE ? 1 : 2;
++        int lengthBits = windowSequence == EIGHT_SHORT_SEQUENCE ? 4 : 6;
++        int orderBits = windowSequence == EIGHT_SHORT_SEQUENCE ? 3 : 5;
++        for (int w = 0; w < numWindows; ++w) {
++            if (!CheckOverrun(lenBytes, pos)) {
++                return false;
++            }
++            int nFilt = read_bits(aac, pos, nFiltBits);
++            int coefRes = 0;
++            if (nFilt) {
++                coefRes = read_bits(aac, pos, 1);
++            }
++            for (int f = 0; f < nFilt; ++f) {
++                pos += lengthBits;
++                if (!CheckOverrun(lenBytes, pos)) {
++                    return false;
++                }
++                int order = read_bits(aac, pos, orderBits);
++                if (order) {
++                    ++pos;
++                    int coefCompress = read_bits(aac, pos, 1);
++                    pos += (3 + coefRes - coefCompress) * order;
++                }
++            }
++        }
++    }
++
++    if (!CheckOverrun(lenBytes, pos)) {
++        return false;
++    }
++    bool gainControlDataPresent = read_bool(aac, pos);
++    if (gainControlDataPresent) {
++        // gain_control_data
++        int maxBand = read_bits(aac, pos, 2);
++        int wdCount = ONLY_LONG_SEQUENCE ? 1 : EIGHT_SHORT_SEQUENCE ? 8 : 2;
++        for (int bd = 1; bd <= maxBand; ++bd) {
++            for (int wd = 0; wd < wdCount; ++wd) {
++                if (!CheckOverrun(lenBytes, pos)) {
++                    return false;
++                }
++                int adjustNum = read_bits(aac, pos, 3);
++                int adjustBits = ONLY_LONG_SEQUENCE ? 9 :
++                                 EIGHT_SHORT_SEQUENCE ? 6 :
++                                 LONG_START_SEQUENCE ? (wd == 0 ? 8 : 6) : (wd == 0 ? 8 : 9);
++                pos += adjustBits * adjustNum;
++            }
++        }
++    }
++
++    if (!CheckOverrun(lenBytes, pos)) {
++        return false;
++    }
++    // spectral_data
++    for (int g = 0; g < numWindowGroups; ++g) {
++        int sectStart = 0;
++        for (int i = 0; i < numSec[g]; ++i) {
++            int codebook = sectCb[g][i];
++            if (codebook == ZERO_HCB || codebook > ESC_HCB) {
++                sectStart = sectEnd[g][i];
++                continue;
++            }
++            int coefEnd = sectSfbOffset[g][sectEnd[g][i]];
++            for (int k = sectSfbOffset[g][sectStart]; k < coefEnd; ) {
++                if (!CheckOverrun(lenBytes, pos)) {
++                    return false;
++                }
++                if (codebook < FIRST_PAIR_HCB) {
++                    int unsigned_, w, x, y, z;
++                    Huffman::DecodeSpectrumQuadBits(codebook - 1, aac, pos, unsigned_, w, x, y, z);
++                    if (unsigned_) {
++                        if (w) ++pos;
++                        if (x) ++pos;
++                        if (y) ++pos;
++                        if (z) ++pos;
++                    }
++                    k += 4;
++                }
++                else {
++                    int unsigned_, y, z;
++                    Huffman::DecodeSpectrumPairBits(codebook - 1, aac, pos, unsigned_, y, z);
++                    if (unsigned_) {
++                        if (y) ++pos;
++                        if (z) ++pos;
++                    }
++                    k += 2;
++                    if (codebook == ESC_HCB) {
++                        if (y == ESC_FLAG) {
++                            int count = 0;
++                            while (read_bool(aac, pos)) {
++                                if (++count > 8) {
++                                    assert(false);
++                                    return false;
++                                }
++                            }
++                            pos += count + 4;
++                        }
++                        if (z == ESC_FLAG) {
++                            int count = 0;
++                            while (read_bool(aac, pos)) {
++                                if (++count > 8) {
++                                    assert(false);
++                                    return false;
++                                }
++                            }
++                            pos += count + 4;
++                        }
++                    }
++                }
++            }
++            sectStart = sectEnd[g][i];
++        }
++    }
++    return true;
++}
++
++void DataStreamElement(const uint8_t *aac, size_t &pos)
++{
++    pos += 4;
++    bool dataByteAlignFlag = read_bool(aac, pos);
++    int cnt = read_bits(aac, pos, 8);
++    if (cnt == 255) {
++        cnt += read_bits(aac, pos, 8);
++    }
++    if (dataByteAlignFlag) {
++        ByteAlignment(pos);
++    }
++    pos += 8 * cnt;
++}
++
++bool ProgramConfigElement(const uint8_t *aac, size_t lenBytes, size_t &pos)
++{
++    pos += 10;
++    int numFrontChannelElements = read_bits(aac, pos, 4);
++    int numSideChannelElements = read_bits(aac, pos, 4);
++    int numBackChannelElements = read_bits(aac, pos, 4);
++    int numLfeChannelElements = read_bits(aac, pos, 2);
++    int numAssocDataElements = read_bits(aac, pos, 3);
++    int numValidCcElements = read_bits(aac, pos, 4);
++    bool monoMixdownPresent = read_bool(aac, pos);
++    if (monoMixdownPresent) {
++        pos += 4;
++    }
++    bool stereoMixdownPresent = read_bool(aac, pos);
++    if (stereoMixdownPresent) {
++        pos += 4;
++    }
++    bool matrixMixdownIdxPresent = read_bool(aac, pos);
++    if (matrixMixdownIdxPresent) {
++        pos += 3;
++    }
++    pos += 5 * numFrontChannelElements;
++    pos += 5 * numSideChannelElements;
++    pos += 5 * numBackChannelElements;
++    pos += 4 * numLfeChannelElements;
++    pos += 4 * numAssocDataElements;
++    pos += 5 * numValidCcElements;
++
++    if (!CheckOverrun(lenBytes, pos)) {
++        return false;
++    }
++    ByteAlignment(pos);
++    int commentFieldBytes = read_bits(aac, pos, 8);
++    pos += 8 * commentFieldBytes;
++    return true;
++}
++
++bool FillElement(const uint8_t *aac, size_t &pos)
++{
++    int cnt = read_bits(aac, pos, 4);
++    if (cnt == 15) {
++        cnt += read_bits(aac, pos, 8) - 1;
++    }
++    if (cnt > 0) {
++        // extension_payload
++        int extensionType = read_bits(aac, pos, 4);
++        if (extensionType == EXT_DYNAMIC_RANGE ||
++            extensionType == EXT_SBR_DATA ||
++            extensionType == EXT_SBR_DATA_CRC) {
++            return false;
++        }
++        pos += 8 * (cnt - 1) + 4;
++    }
++    return true;
++}
++
++int RawDataBlock(const uint8_t *aac, size_t lenBytes, size_t &pos, bool is32khz)
++{
++    if (!CheckOverrun(lenBytes, pos)) {
++        return -1;
++    }
++    int id = read_bits(aac, pos, 3);
++    if (id == ID_SCE) {
++        if (SingleChannelElement(aac, lenBytes, pos, is32khz)) {
++            return id;
++        }
++    }
++    else if (id == ID_DSE) {
++        DataStreamElement(aac, pos);
++        return id;
++    }
++    else if (id == ID_PCE) {
++        if (ProgramConfigElement(aac, lenBytes, pos)) {
++            return id;
++        }
++    }
++    else if (id == ID_FIL) {
++        if (FillElement(aac, pos)) {
++            return id;
++        }
++    }
++    else if (id == ID_END) {
++        return id;
++    }
++    return -1;
++}
++
++bool SyncPayload(std::vector<uint8_t> &workspace, const uint8_t *payload, size_t lenBytes)
++{
++    if (!workspace.empty() && workspace[0] == 0) {
++        // No need to resync
++        workspace.insert(workspace.end(), payload, payload + lenBytes);
++        workspace[0] = 0xff;
++    }
++    else {
++        // Resync
++        workspace.insert(workspace.end(), payload, payload + lenBytes);
++        size_t i = 0;
++        for (; i < workspace.size(); ++i) {
++            if (workspace[i] == 0xff && (i + 1 >= workspace.size() || (workspace[i + 1] & 0xf0) == 0xf0)) {
++                break;
++            }
++        }
++        workspace.erase(workspace.begin(), workspace.begin() + i);
++        if (workspace.size() < 2) {
++            return false;
++        }
++    }
++    assert(workspace[0] == 0xff);
++    return true;
++}
++
++void SkipPayload(std::vector<uint8_t> &workspace, size_t workspaceLenBytes)
++{
++    workspace.resize(workspaceLenBytes);
++    size_t i = 0;
++    while (workspaceLenBytes - i > 0) {
++        if (workspace[i] != 0xff) {
++            // Need to resync
++            workspace.clear();
++            return;
++        }
++        if (workspaceLenBytes - i < 7) {
++            break;
++        }
++        if ((workspace[i + 1] & 0xf0) != 0xf0) {
++            workspace.clear();
++            return;
++        }
++        size_t pos = 30;
++        size_t frameLenBytes = read_bits(workspace.data() + i, pos, 13);
++        if (frameLenBytes < 7) {
++            workspace.clear();
++            return;
++        }
++        if (workspaceLenBytes - i < frameLenBytes) {
++            break;
++        }
++        i += frameLenBytes;
++    }
++
++    // Carry over the remaining payload.
++    workspace.erase(workspace.begin(), workspace.begin() + i);
++    if (!workspace.empty()) {
++        assert(workspace[0] == 0xff);
++        // This 0 means synchronized 0xff.
++        workspace[0] = 0;
++    }
++}
++}
++
++namespace Aac
++{
++bool TransmuxDualMono(std::vector<uint8_t> &destLeft, std::vector<uint8_t> &destRight, std::vector<uint8_t> &workspace,
++                      bool muxLeftToStereo, bool muxRightToStereo, const uint8_t *payload, size_t lenBytes)
++{
++    destLeft.clear();
++    destRight.clear();
++    if (!SyncPayload(workspace, payload, lenBytes)) {
++        // No ADTS frames, done.
++        return true;
++    }
++    size_t workspaceLenBytes = workspace.size();
++    workspace.insert(workspace.end(), EXTRA_WORKSPACE_BYTES, 0);
++
++    while (workspaceLenBytes > 0) {
++        if (workspace[0] != 0xff) {
++            // Need to resync
++            workspace.clear();
++            return false;
++        }
++        if (workspaceLenBytes < 7) {
++            break;
++        }
++        if ((workspace[1] & 0xf0) != 0xf0) {
++            workspace.clear();
++            return false;
++        }
++
++        // ADTS header
++        const uint8_t *aac = workspace.data();
++        size_t pos = 12;
++        pos += 3;
++        bool protectionAbsent = read_bool(aac, pos);
++        pos += 2;
++        int samplingFrequencyIndex = read_bits(aac, pos, 4);
++        // Frequencies other than 48/44.1/32kHz are not supported.
++        if (samplingFrequencyIndex < 3 || samplingFrequencyIndex > 5) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++        ++pos;
++        int channelConfiguration = read_bits(aac, pos, 3);
++        // ARIB STD-B32 seems to define "channel_configuration = 0 and exactly 2 SCEs" as "dual mono".
++        if (channelConfiguration != 0) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++        pos += 4;
++        size_t frameLenBytes = read_bits(aac, pos, 13);
++        if (frameLenBytes < 7) {
++            workspace.clear();
++            return false;
++        }
++        if (workspaceLenBytes < frameLenBytes) {
++            break;
++        }
++        pos += 11;
++        int blocksInFrame = read_bits(aac, pos, 2);
++
++        if (!protectionAbsent) {
++            // adts(_header)_error_check
++            pos += (blocksInFrame + 1) * 16;
++        }
++
++        size_t sceBegin[4][2];
++        size_t sceEnd[4][2];
++        for (int i = 0; i <= blocksInFrame; ++i) {
++            int sceCount = 0;
++            for (;;) {
++                size_t beginPos = pos;
++                int id = RawDataBlock(aac, frameLenBytes, pos, samplingFrequencyIndex == 5);
++                if (id < 0) {
++                    SkipPayload(workspace, workspaceLenBytes);
++                    return false;
++                }
++                if (id == ID_END) {
++                    break;
++                }
++                if (id == ID_SCE) {
++                    if (sceCount >= 2) {
++                        SkipPayload(workspace, workspaceLenBytes);
++                        return false;
++                    }
++                    sceBegin[i][sceCount] = beginPos;
++                    sceEnd[i][sceCount++] = pos;
++                }
++            }
++            if (sceCount != 2) {
++                SkipPayload(workspace, workspaceLenBytes);
++                return false;
++            }
++            ByteAlignment(pos);
++            if (blocksInFrame != 0 && !protectionAbsent) {
++                // adts_raw_data_block_error_check
++                pos += 16;
++            }
++        }
++
++        assert(pos == frameLenBytes * 8);
++        if (!CheckOverrun(frameLenBytes, pos)) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++
++        // Append 2 ADTS
++        for (int destIndex = 0; destIndex < 2; ++destIndex) {
++            std::vector<uint8_t> &dest = destIndex == 0 ? destLeft : destRight;
++            bool muxToStereo = destIndex == 0 ? muxLeftToStereo : muxRightToStereo;
++
++            // ADTS header
++            size_t destHeadBytes = dest.size();
++            dest.insert(dest.end(), aac, aac + 7);
++            // protection_absent = 1
++            dest[destHeadBytes + 1] |= 0x01;
++            // channel_configuration = 2 or 1
++            dest[destHeadBytes + 3] |= muxToStereo ? 0x80 : 0x40;
++
++            for (int i = 0; i <= blocksInFrame; ++i) {
++                size_t scePos = sceBegin[i][destIndex];
++                size_t sceEndPos = sceEnd[i][destIndex];
++                if (muxToStereo) {
++                    // CPE
++                    scePos += 3;
++                    // Copy element_instance_tag, common_window = 0
++                    dest.push_back((ID_CPE << 5) | static_cast<uint8_t>(read_bits(aac, scePos, 4) << 1));
++
++                    // Left individual_channel_stream
++                    size_t leftPos = scePos;
++                    while (leftPos + 7 < sceEndPos) {
++                        dest.push_back(static_cast<uint8_t>(read_bits(aac, leftPos, 8)));
++                    }
++                    int leftRemain = static_cast<int>(sceEndPos - leftPos);
++                    if (leftRemain != 0) {
++                        dest.push_back(static_cast<uint8_t>(read_bits(aac, leftPos, leftRemain)) << (8 - leftRemain));
++                    }
++                    // Right individual_channel_stream
++                    if (leftRemain != 0) {
++                        dest.back() |= static_cast<uint8_t>(read_bits(aac, scePos, 8 - leftRemain));
++                    }
++                }
++                // SCE or Right individual_channel_stream
++                while (scePos + 7 < sceEndPos) {
++                    dest.push_back(static_cast<uint8_t>(read_bits(aac, scePos, 8)));
++                }
++                int sceRemain = static_cast<int>(sceEndPos - scePos);
++                if (sceRemain != 0) {
++                    dest.push_back((static_cast<uint8_t>(read_bits(aac, scePos, sceRemain)) << (8 - sceRemain)) | (0xe0 >> sceRemain));
++                }
++                if (sceRemain == 0 || sceRemain >= 6) {
++                    // ID_END, remaining bits are filled with 0.
++                    dest.push_back((0x60e0 >> sceRemain) & 0xe0);
++                }
++            }
++
++            // aac_frame_length
++            size_t destFrameLenBytes = dest.size() - destHeadBytes;
++            dest[destHeadBytes + 3] = (dest[destHeadBytes + 3] & 0xfc) | static_cast<uint8_t>(destFrameLenBytes >> 11);
++            dest[destHeadBytes + 4] = static_cast<uint8_t>(destFrameLenBytes >> 3);
++            dest[destHeadBytes + 5] = static_cast<uint8_t>(destFrameLenBytes << 5) | (dest[destHeadBytes + 5] & 0x1f);
++        }
++
++        // Erase current frame.
++        workspace.erase(workspace.begin(), workspace.begin() + frameLenBytes);
++        workspaceLenBytes -= frameLenBytes;
++    }
++
++    SkipPayload(workspace, workspaceLenBytes);
++    return true;
++}
++
++bool TransmuxMonoToStereo(std::vector<uint8_t> &dest, std::vector<uint8_t> &workspace, const uint8_t *payload, size_t lenBytes)
++{
++    dest.clear();
++    if (!SyncPayload(workspace, payload, lenBytes)) {
++        // No ADTS frames, done.
++        return true;
++    }
++    size_t workspaceLenBytes = workspace.size();
++    workspace.insert(workspace.end(), EXTRA_WORKSPACE_BYTES, 0);
++
++    while (workspaceLenBytes > 0) {
++        if (workspace[0] != 0xff) {
++            // Need to resync
++            workspace.clear();
++            return false;
++        }
++        if (workspaceLenBytes < 7) {
++            break;
++        }
++        if ((workspace[1] & 0xf0) != 0xf0) {
++            workspace.clear();
++            return false;
++        }
++
++        // ADTS header
++        const uint8_t *aac = workspace.data();
++        size_t pos = 12;
++        pos += 3;
++        bool protectionAbsent = read_bool(aac, pos);
++        pos += 2;
++        int samplingFrequencyIndex = read_bits(aac, pos, 4);
++        // Frequencies other than 48/44.1/32kHz are not supported.
++        if (samplingFrequencyIndex < 3 || samplingFrequencyIndex > 5) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++        ++pos;
++        int channelConfiguration = read_bits(aac, pos, 3);
++        if (channelConfiguration != 1) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++        pos += 4;
++        size_t frameLenBytes = read_bits(aac, pos, 13);
++        if (frameLenBytes < 7) {
++            workspace.clear();
++            return false;
++        }
++        if (workspaceLenBytes < frameLenBytes) {
++            break;
++        }
++        pos += 11;
++        int blocksInFrame = read_bits(aac, pos, 2);
++
++        if (!protectionAbsent) {
++            // adts(_header)_error_check
++            pos += (blocksInFrame + 1) * 16;
++        }
++
++        size_t sceBegin[4];
++        size_t sceEnd[4];
++        for (int i = 0; i <= blocksInFrame; ++i) {
++            bool sceFound = false;
++            for (;;) {
++                size_t beginPos = pos;
++                int id = RawDataBlock(aac, frameLenBytes, pos, samplingFrequencyIndex == 5);
++                if (id < 0) {
++                    SkipPayload(workspace, workspaceLenBytes);
++                    return false;
++                }
++                if (id == ID_END) {
++                    break;
++                }
++                if (id == ID_SCE) {
++                    if (sceFound) {
++                        SkipPayload(workspace, workspaceLenBytes);
++                        return false;
++                    }
++                    sceBegin[i] = beginPos;
++                    sceEnd[i] = pos;
++                    sceFound = true;
++                }
++            }
++            if (!sceFound) {
++                SkipPayload(workspace, workspaceLenBytes);
++                return false;
++            }
++            ByteAlignment(pos);
++            if (blocksInFrame != 0 && !protectionAbsent) {
++                // adts_raw_data_block_error_check
++                pos += 16;
++            }
++        }
++
++        assert(pos == frameLenBytes * 8);
++        if (!CheckOverrun(frameLenBytes, pos)) {
++            SkipPayload(workspace, workspaceLenBytes);
++            return false;
++        }
++
++        // ADTS header
++        size_t destHeadBytes = dest.size();
++        dest.insert(dest.end(), aac, aac + 7);
++        // protection_absent = 1
++        dest[destHeadBytes + 1] |= 0x01;
++        // channel_configuration = 2
++        dest[destHeadBytes + 3] = (dest[destHeadBytes + 3] & 0x3f) | 0x80;
++
++        for (int i = 0; i <= blocksInFrame; ++i) {
++            size_t scePos = sceBegin[i];
++            size_t sceEndPos = sceEnd[i];
++            {
++                // CPE
++                scePos += 3;
++                // Copy element_instance_tag, common_window = 0
++                dest.push_back((ID_CPE << 5) | static_cast<uint8_t>(read_bits(aac, scePos, 4) << 1));
++
++                // Left individual_channel_stream
++                size_t leftPos = scePos;
++                while (leftPos + 7 < sceEndPos) {
++                    dest.push_back(static_cast<uint8_t>(read_bits(aac, leftPos, 8)));
++                }
++                int leftRemain = static_cast<int>(sceEndPos - leftPos);
++                if (leftRemain != 0) {
++                    dest.push_back(static_cast<uint8_t>(read_bits(aac, leftPos, leftRemain)) << (8 - leftRemain));
++                }
++                // Right individual_channel_stream
++                if (leftRemain != 0) {
++                    dest.back() |= static_cast<uint8_t>(read_bits(aac, scePos, 8 - leftRemain));
++                }
++            }
++            while (scePos + 7 < sceEndPos) {
++                dest.push_back(static_cast<uint8_t>(read_bits(aac, scePos, 8)));
++            }
++            int sceRemain = static_cast<int>(sceEndPos - scePos);
++            if (sceRemain != 0) {
++                dest.push_back((static_cast<uint8_t>(read_bits(aac, scePos, sceRemain)) << (8 - sceRemain)) | (0xe0 >> sceRemain));
++            }
++            if (sceRemain == 0 || sceRemain >= 6) {
++                // ID_END, remaining bits are filled with 0.
++                dest.push_back((0x60e0 >> sceRemain) & 0xe0);
++            }
++        }
++
++        // aac_frame_length
++        size_t destFrameLenBytes = dest.size() - destHeadBytes;
++        dest[destHeadBytes + 3] = (dest[destHeadBytes + 3] & 0xfc) | static_cast<uint8_t>(destFrameLenBytes >> 11);
++        dest[destHeadBytes + 4] = static_cast<uint8_t>(destFrameLenBytes >> 3);
++        dest[destHeadBytes + 5] = static_cast<uint8_t>(destFrameLenBytes << 5) | (dest[destHeadBytes + 5] & 0x1f);
++
++        // Erase current frame.
++        workspace.erase(workspace.begin(), workspace.begin() + frameLenBytes);
++        workspaceLenBytes -= frameLenBytes;
++    }
++
++    SkipPayload(workspace, workspaceLenBytes);
++    return true;
++}
++}
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/aac.hpp b/modules/stream_filter/arib_dualmono/tsreadex/aac.hpp
+new file mode 100644
+index 0000000000..93264559b7
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/aac.hpp
+@@ -0,0 +1,18 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#ifndef INCLUDE_AAC_HPP
++#define INCLUDE_AAC_HPP
++
++#include <stddef.h>
++#include <stdint.h>
++#include <vector>
++
++namespace Aac
++{
++bool TransmuxDualMono(std::vector<uint8_t> &destLeft, std::vector<uint8_t> &destRight, std::vector<uint8_t> &workspace,
++                      bool muxLeftToStereo, bool muxRightToStereo, const uint8_t *payload, size_t lenBytes);
++bool TransmuxMonoToStereo(std::vector<uint8_t> &dest, std::vector<uint8_t> &workspace, const uint8_t *payload, size_t lenBytes);
++}
++
++#endif
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/huffman.cpp b/modules/stream_filter/arib_dualmono/tsreadex/huffman.cpp
+new file mode 100644
+index 0000000000..f71d0ea817
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/huffman.cpp
+@@ -0,0 +1,386 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#include "huffman.hpp"
++#include "util.hpp"
++
++namespace
++{
++const uint16_t SCALEFACTOR_TREE[][2] =
++{
++    {560,   1}, { 92,   2}, { 90,   3}, { 87,   4}, { 83,   5},
++    { 79,   6}, { 74,   7}, { 72,   8}, { 67,   9}, { 62,  10},
++    { 56,  11}, { 52,  12}, { 44,  13}, { 14,  22}, { 18,  15},
++    { 16,  98}, { 17, 106}, {500, 105}, { 42,  19}, { 21,  20},
++    {501, 502}, {519, 503}, { 29,  23}, { 24,  35}, { 27,  25},
++    { 26,  33}, {619, 504}, { 28, 109}, {510, 505}, {110,  30},
++    {113,  31}, { 32,  34}, {618, 506}, {507, 515}, {508, 509},
++    { 39,  36}, { 37,  38}, {511, 512}, {514, 513}, { 40,  41},
++    {516, 518}, {520, 517}, {523,  43}, {590, 521}, { 49,  45},
++    { 48,  46}, {588,  47}, {525, 522}, {528, 524}, { 51,  50},
++    {526, 527}, {586, 529}, { 55,  53}, { 97,  54}, {530, 531},
++    {584, 532}, { 60,  57}, { 58,  59}, {585, 533}, {536, 534},
++    {583,  61}, {537, 535}, { 66,  63}, { 65,  64}, {582, 538},
++    {581, 539}, {580, 540}, { 70,  68}, { 71,  69}, {542, 541},
++    {545, 543}, {544, 579}, { 73,  94}, {574, 546}, { 78,  75},
++    { 77,  76}, {573, 547}, {572, 548}, {549, 571}, { 82,  80},
++    {551,  81}, {570, 550}, {552, 569}, { 86,  84}, {567,  85},
++    {553, 568}, {566, 554}, { 89,  88}, {555, 565}, {556, 564},
++    {562,  91}, {557, 563}, {559,  93}, {561, 558}, { 95,  96},
++    {576, 575}, {577, 578}, {587, 589}, { 99, 102}, {100, 101},
++    {597, 591}, {592, 593}, {103, 104}, {594, 595}, {596, 604},
++    {598, 599}, {107, 108}, {600, 601}, {602, 617}, {603, 620},
++    {116, 111}, {119, 112}, {610, 605}, {114, 115}, {606, 607},
++    {608, 609}, {117, 118}, {611, 612}, {613, 614}, {615, 616},
++};
++
++const uint16_t SPECTRUM1_TREE[][2] =
++{
++    {540,   1}, { 38,   2}, { 19,   3}, { 33,   4}, { 28,   5},
++    { 11,   6}, { 16,   7}, { 25,   8}, {  9,  14}, { 10,  58},
++    {500, 574}, { 12,  55}, { 13,  59}, {521, 501}, { 15,  76},
++    {518, 502}, { 23,  17}, { 18,  46}, {511, 503}, { 52,  20},
++    { 21,  44}, { 22,  73}, {504, 528}, { 24,  78}, {505, 509},
++    { 50,  26}, { 32,  27}, {572, 506}, { 47,  29}, { 42,  30},
++    { 31,  77}, {507, 529}, {580, 508}, { 34,  36}, { 74,  35},
++    {510, 568}, { 37,  41}, {512, 566}, { 39,  60}, { 40,  71},
++    {567, 513}, {514, 530}, { 72,  43}, {525, 515}, { 45,  62},
++    {516, 544}, {517, 571}, { 48,  63}, { 49,  75}, {573, 519},
++    { 51,  57}, {560, 520}, { 53,  65}, { 54,  70}, {558, 522},
++    { 79,  56}, {523, 579}, {524, 556}, {562, 526}, {527, 553},
++    { 69,  61}, {543, 531}, {570, 532}, { 67,  64}, {533, 555},
++    { 66,  68}, {534, 542}, {547, 535}, {576, 536}, {541, 537},
++    {538, 546}, {539, 549}, {565, 545}, {564, 548}, {552, 550},
++    {561, 551}, {554, 578}, {559, 557}, {575, 563}, {569, 577},
++};
++
++const uint16_t SPECTRUM2_TREE[][2] =
++{
++    { 38,   1}, { 20,   2}, {  9,   3}, { 16,   4}, { 29,   5},
++    {  6,  13}, {  7,  24}, {520,   8}, {556, 500}, { 46,  10},
++    { 57,  11}, { 61,  12}, {515, 501}, { 27,  14}, { 15,  79},
++    {554, 502}, { 35,  17}, { 18,  59}, { 26,  19}, {505, 503},
++    { 21,  32}, { 22,  64}, { 37,  23}, {564, 504}, { 56,  25},
++    {580, 506}, {507, 517}, { 45,  28}, {508, 572}, { 30,  66},
++    { 55,  31}, {509, 551}, { 42,  33}, { 34,  76}, {530, 510},
++    { 36,  49}, {511, 555}, {512, 558}, { 39,  51}, {540,  40},
++    {567,  41}, {513, 541}, { 44,  43}, {528, 514}, {516, 550},
++    {562, 518}, { 73,  47}, { 75,  48}, {519, 533}, {573,  50},
++    {559, 521}, { 62,  52}, { 53,  70}, {549,  54}, {534, 522},
++    {553, 523}, {524, 526}, { 78,  58}, {571, 525}, { 60,  74},
++    {527, 569}, {529, 579}, { 69,  63}, {531, 543}, { 68,  65},
++    {568, 532}, { 67,  77}, {557, 535}, {536, 570}, {537, 539},
++    { 72,  71}, {548, 538}, {546, 542}, {544, 566}, {563, 545},
++    {547, 565}, {576, 552}, {577, 560}, {561, 575}, {574, 578},
++};
++
++const uint16_t SPECTRUM3_TREE[][2] =
++{
++    {500,   1}, {  2,   4}, {  3,  10}, {527, 501}, { 11,   5},
++    {  6,  13}, { 52,   7}, { 55,   8}, {537,   9}, {554, 502},
++    {509, 503}, { 12,  27}, {536, 504}, { 14,  22}, { 15,  17},
++    { 16,  20}, {505, 563}, { 18,  29}, { 32,  19}, {566, 506},
++    {548,  21}, {507, 516}, { 34,  23}, { 24,  38}, { 25,  53},
++    { 56,  26}, {508, 517}, { 28,  31}, {512, 510}, { 33,  30},
++    {518, 511}, {530, 513}, {545, 514}, {521, 515}, { 44,  35},
++    { 57,  36}, { 37,  63}, {534, 519}, { 48,  39}, { 46,  40},
++    { 50,  41}, { 42,  65}, {553,  43}, {520, 560}, { 67,  45},
++    {522, 542}, { 47,  59}, {524, 523}, { 49,  61}, {525,  70},
++    { 51,  68}, {526, 579}, {528, 539}, { 69,  54}, {529, 555},
++    {540, 531}, {564, 532}, {543,  58}, {546, 533}, { 60,  78},
++    {535, 573}, { 62,  64}, {538, 558}, {567, 541}, {544, 576},
++    { 66,  71}, {547,  75}, {557, 549}, {570, 550}, {575, 551},
++    {572, 552}, { 77,  72}, { 74,  73}, {556,  76}, {571, 559},
++    {561, 568}, {574, 562}, {565,  79}, {569, 578}, {580, 577},
++};
++
++const uint16_t SPECTRUM4_TREE[][2] =
++{
++    {  1,   4}, { 32,   2}, { 54,   3}, {536, 500}, {  5,   8},
++    { 16,   6}, { 31,   7}, {501, 510}, { 14,   9}, { 17,  10},
++    { 11,  24}, { 22,  12}, { 55,  13}, {502,  21}, { 15,  62},
++    {503, 509}, {504, 530}, { 34,  18}, { 56,  19}, { 30,  20},
++    {521, 505}, {518, 506}, { 37,  23}, {529, 507}, { 48,  25},
++    { 38,  26}, { 45,  27}, { 28,  52}, { 29,  41}, {508, 560},
++    {555, 511}, {528, 512}, { 33,  60}, {540, 513}, { 35,  42},
++    {516,  36}, {514, 542}, {515, 519}, { 39,  58}, { 40,  44},
++    {517, 573}, {520, 556}, { 43,  61}, {522, 532}, {523, 561},
++    { 75,  46}, { 79,  47}, {524, 572}, { 66,  49}, { 72,  50},
++    { 73,  51}, {569, 525}, { 53,  76}, {580, 526}, {531, 527},
++    {533, 554}, { 57,  68}, {534, 563}, { 59,  69}, {535, 579},
++    {537, 539}, {546, 538}, { 63,  70}, { 65,  64}, {549, 541},
++    {567, 543}, { 74,  67}, {570, 544}, {557, 545}, {547, 559},
++    { 78,  71}, {548, 558}, {550, 568}, {551, 575}, {552, 576},
++    {565, 553}, {578,  77}, {574, 562}, {566, 564}, {571, 577},
++};
++
++const uint16_t SPECTRUM5_TREE[][2] =
++{
++    {540,   1}, { 68,   2}, { 66,   3}, { 53,   4}, { 38,   5},
++    { 34,   6}, { 19,   7}, { 16,   8}, { 13,   9}, { 28,  10},
++    { 31,  11}, { 30,  12}, {580, 500}, { 27,  14}, { 50,  15},
++    {563, 501}, { 32,  17}, { 18,  77}, {502, 578}, { 23,  20},
++    { 21,  25}, { 22,  63}, {503, 544}, { 24,  79}, {536, 504},
++    { 73,  26}, {505, 545}, {570, 506}, { 29,  49}, {507, 571},
++    {572, 508}, {573, 509}, { 33,  48}, {564, 510}, { 51,  35},
++    { 36,  46}, { 37,  62}, {511, 565}, { 42,  39}, { 40,  44},
++    { 41,  64}, {512, 552}, { 43,  74}, {513, 567}, { 45,  72},
++    {514, 566}, { 78,  47}, {515, 519}, {516, 526}, {517, 579},
++    {518, 574}, { 61,  52}, {520, 556}, { 57,  54}, { 55,  59},
++    { 56,  65}, {521, 559}, { 58,  75}, {522, 542}, { 60,  71},
++    {523, 557}, {524, 560}, {525, 555}, {575, 527}, {568, 528},
++    {529, 551}, { 70,  67}, {530, 550}, { 69,  76}, {531, 549},
++    {548, 532}, {533, 547}, {546, 534}, {553, 535}, {537, 543},
++    {558, 538}, {541, 539}, {554, 562}, {569, 561}, {577, 576},
++};
++
++const uint16_t SPECTRUM6_TREE[][2] =
++{
++    { 60,   1}, { 47,   2}, { 32,   3}, { 28,   4}, { 15,   5},
++    { 12,   6}, { 22,   7}, { 77,   8}, { 11,   9}, { 21,  10},
++    {500, 572}, {507, 501}, { 13,  19}, { 14,  42}, {506, 502},
++    { 25,  16}, { 17,  65}, { 56,  18}, {505, 503}, { 20,  55},
++    {504, 578}, {580, 508}, { 74,  23}, {544,  24}, {509, 517},
++    { 40,  26}, { 27,  41}, {564, 510}, { 36,  29}, { 30,  43},
++    {569,  31}, {511, 525}, { 45,  33}, { 38,  34}, { 35,  57},
++    {512, 552}, { 37,  67}, {567, 513}, { 39,  64}, {514, 568},
++    {515, 570}, {516, 545}, {562, 518}, { 76,  44}, {555, 519},
++    { 54,  46}, {520, 560}, { 48,  51}, {530,  49}, { 75,  50},
++    {523, 521}, { 52,  58}, { 53,  72}, {522, 533}, {556, 524},
++    {574, 526}, {527, 577}, {546, 528}, { 68,  59}, {529, 542},
++    { 69,  61}, { 62,  63}, {531, 550}, {532, 548}, {566, 534},
++    { 73,  66}, {535, 536}, {537, 543}, {551, 538}, { 71,  70},
++    {539, 541}, {540, 549}, {558, 547}, {553, 575}, {576, 554},
++    {557, 559}, {561, 565}, { 78,  79}, {563, 573}, {571, 579},
++};
++
++const uint16_t SPECTRUM7_TREE[][2] =
++{
++    {500,   1}, {  2,   3}, {508, 501}, {  4,   7}, {509,   5},
++    { 28,   6}, {516, 502}, {  8,  11}, { 29,   9}, { 10,  31},
++    {503,  38}, { 12,  18}, { 13,  15}, { 39,  14}, {504, 532},
++    { 16,  34}, { 40,  17}, {542, 505}, { 19,  23}, { 41,  20},
++    { 36,  21}, { 22,  47}, {530, 506}, { 43,  24}, { 25,  51},
++    { 50,  26}, {531,  27}, {556, 507}, {517, 510}, { 30,  37},
++    {525, 511}, { 32,  33}, {512, 533}, {513, 541}, { 54,  35},
++    {514, 535}, {550, 515}, {518, 524}, {519, 526}, {527, 520},
++    {534, 521}, { 46,  42}, {543, 522}, { 48,  44}, { 45,  59},
++    {551, 523}, {529, 528}, {548, 536}, { 49,  55}, {557, 537},
++    {545, 538}, { 52,  57}, { 56,  53}, {560, 539}, {549, 540},
++    {558, 544}, {553, 546}, { 58,  60}, {547, 561}, {559, 552},
++    { 61,  62}, {562, 554}, {555, 563},
++};
++
++const uint16_t SPECTRUM8_TREE[][2] =
++{
++    {  1,   6}, { 29,   2}, {  5,   3}, {518,   4}, {500, 516},
++    {510, 501}, {  7,  10}, {  8,  32}, {  9,  31}, {502, 525},
++    { 11,  17}, { 12,  14}, { 13,  50}, {503, 535}, { 35,  15},
++    { 51,  16}, {544, 504}, { 37,  18}, { 19,  22}, { 20,  47},
++    { 21,  56}, {552, 505}, { 40,  23}, { 24,  26}, { 57,  25},
++    {506, 561}, { 62,  27}, { 59,  28}, {507, 563}, {509,  30},
++    {517, 508}, {511, 526}, { 42,  33}, { 34,  43}, {512, 534},
++    { 44,  36}, {513, 543}, { 45,  38}, { 39,  52}, {549, 514},
++    { 41,  54}, {515, 546}, {519,  49}, {520, 524}, {541, 521},
++    { 55,  46}, {522, 550}, { 48,  60}, {558, 523}, {527, 533},
++    {528, 542}, {529, 536}, { 53,  58}, {530, 551}, {531,  61},
++    {537, 532}, {538, 557}, {548, 539}, {545, 540}, {547, 556},
++    {553, 559}, {554, 560}, {562, 555},
++};
++
++const uint16_t SPECTRUM9_TREE[][2] =
++{
++    {500,   1}, {  2,   3}, {513, 501}, {  4,   7}, {514,   5},
++    { 53,   6}, {526, 502}, {  8,  16}, {  9,  12}, { 74,  10},
++    {516,  11}, {539, 503}, { 54,  13}, { 56,  14}, { 90,  15},
++    {504, 552}, { 17,  26}, { 18,  22}, { 57,  19}, {112,  20},
++    {555,  21}, {505, 532}, { 59,  23}, { 24,  77}, { 25,  79},
++    {592, 506}, { 27,  34}, { 28,  65}, { 63,  29}, { 30,  32},
++    { 31,  91}, {507, 619}, { 33, 124}, {546, 508}, { 35,  44},
++    { 36,  40}, { 83,  37}, { 38,  69}, { 39, 125}, {509, 645},
++    { 71,  41}, { 94,  42}, { 43, 138}, {647, 510}, { 86,  45},
++    { 46, 129}, { 47,  50}, {110,  48}, { 49, 128}, {511, 662},
++    {121,  51}, { 52, 145}, {512, 650}, {527, 515}, { 75,  55},
++    {517, 553}, {530, 518}, { 76,  58}, {519, 543}, { 60, 102},
++    { 61,  62}, {565, 520}, {544, 521}, { 64, 114}, {522, 593},
++    { 80,  66}, { 67,  92}, { 68, 116}, {523, 595}, {106,  70},
++    {610, 524}, {117,  72}, { 73, 163}, {537, 525}, {540, 528},
++    {529, 541}, {566, 531}, { 78, 104}, {545, 533}, {606, 534},
++    { 81, 136}, { 82, 135}, {535, 570}, {119,  84}, {609,  85},
++    {633, 536}, { 87,  96}, {107,  88}, { 89, 109}, {538, 623},
++    {554, 542}, {547, 558}, {105,  93}, {548, 644}, { 95, 126},
++    {549, 574}, { 97,  99}, {127,  98}, {550, 575}, {100, 139},
++    {141, 101}, {661, 551}, {103, 113}, {605, 556}, {557, 618},
++    {560, 559}, {657, 561}, {155, 108}, {562, 586}, {624, 563},
++    {111, 120}, {636, 564}, {567, 579}, {568, 580}, {115, 123},
++    {578, 569}, {583, 571}, {152, 118}, {572, 596}, {573, 617},
++    {600, 576}, {122, 142}, {637, 577}, {581, 607}, {631, 582},
++    {621, 584}, {585, 611}, {643, 587}, {588, 656}, {130, 146},
++    {131, 133}, {143, 132}, {663, 589}, {150, 134}, {603, 590},
++    {604, 591}, {137, 144}, {594, 632}, {597, 659}, {140, 164},
++    {648, 598}, {612, 599}, {601, 625}, {638, 602}, {620, 608},
++    {613, 626}, {147, 156}, {148, 153}, {149, 151}, {614, 639},
++    {615, 651}, {616, 627}, {622, 634}, {154, 159}, {628, 629},
++    {630, 635}, {157, 160}, {158, 165}, {640, 652}, {641, 665},
++    {167, 161}, {162, 166}, {642, 654}, {658, 646}, {660, 649},
++    {664, 653}, {655, 668}, {666, 667},
++};
++
++const uint16_t SPECTRUM10_TREE[][2] =
++{
++    {  6,   1}, {  2,  19}, {  3,  15}, {  4,  13}, { 59,   5},
++    {500, 555}, { 55,   7}, {  8,  10}, {  9, 103}, {501, 516},
++    { 86,  11}, { 12,  87}, {526, 502}, {102,  14}, {503, 556},
++    { 60,  16}, { 89,  17}, {111,  18}, {579, 504}, { 20,  25},
++    { 63,  21}, { 22,  68}, { 23,  66}, {121,  24}, {592, 505},
++    { 26,  31}, { 27,  71}, {124,  28}, {135,  29}, {105,  30},
++    {535, 506}, { 32,  39}, { 75,  33}, { 34,  79}, { 35,  37},
++    { 36, 107}, {507, 612}, {129,  38}, {648, 508}, { 40,  44},
++    {108,  41}, {143,  42}, { 43, 120}, {657, 509}, { 82,  45},
++    { 46,  51}, { 47,  49}, { 48, 162}, {510, 603}, {166,  50},
++    {511, 654}, {154,  52}, {159,  53}, { 54, 167}, {667, 512},
++    { 58,  56}, {527,  57}, {528, 513}, {514, 515}, {517, 553},
++    { 88,  61}, { 62, 104}, {518, 566}, { 64,  91}, { 65, 122},
++    {519, 545}, { 67, 147}, {605, 520}, { 94,  69}, { 70, 114},
++    {521, 547}, { 72,  96}, {115,  73}, { 74, 152}, {522, 598},
++    {117,  76}, {149,  77}, { 78, 156}, {636, 523}, { 99,  80},
++    {119,  81}, {524, 658}, { 83, 132}, {101,  84}, {614,  85},
++    {627, 525}, {529, 542}, {530, 554}, {531, 567}, {112,  90},
++    {580, 532}, {113,  92}, { 93, 123}, {546, 533}, { 95, 138},
++    {559, 534}, {127,  97}, { 98, 106}, {536, 631}, {100, 142},
++    {647, 537}, {662, 538}, {543, 539}, {541, 540}, {568, 544},
++    {548, 618}, {549, 623}, {635, 550}, {130, 109}, {164, 110},
++    {661, 551}, {581, 552}, {569, 557}, {558, 137}, {608, 560},
++    {151, 116}, {561, 632}, {141, 118}, {562, 591}, {637, 563},
++    {564, 626}, {594, 565}, {570, 582}, {571, 606}, {125, 126},
++    {572, 609}, {573, 139}, {148, 128}, {574, 634}, {575, 613},
++    {157, 131}, {649, 576}, {133, 145}, {165, 134}, {602, 577},
++    {136, 140}, {619, 578}, {583, 593}, {584, 596}, {597, 585},
++    {586, 620}, {587, 604}, {601, 588}, {144, 161}, {589, 617},
++    {146, 153}, {590, 639}, {607, 595}, {599, 633}, {645, 150},
++    {600, 646}, {610, 621}, {611, 622}, {615, 664}, {158, 155},
++    {656, 616}, {644, 624}, {625, 659}, {628, 641}, {163, 160},
++    {629, 655}, {638, 630}, {643, 640}, {665, 642}, {660, 650},
++    {651, 663}, {652, 653}, {666, 668},
++};
++
++const uint16_t SPECTRUM11_TREE[][2] =
++{
++    {  1,  13}, {  2,   6}, {  3,   4}, {500, 518}, { 71,   5},
++    {501, 535}, { 72,   7}, {  8,  10}, {  9,  76}, {537, 502},
++    {116,  11}, { 12, 187}, {551, 503}, { 14,  20}, { 15,  84},
++    { 78,  16}, { 81,  17}, {169,  18}, { 19, 188}, {504, 550},
++    { 21,  31}, { 22,  26}, { 23,  89}, {175,  24}, {202,  25},
++    {505, 228}, { 27,  94}, { 28, 132}, {191,  29}, { 93,  30},
++    {673, 506}, { 32,  38}, { 33, 102}, { 67,  34}, { 35,  98},
++    { 36, 141}, { 37, 264}, {507, 564}, { 39,  48}, { 40,  44},
++    { 41, 107}, { 42, 218}, {101,  43}, {508, 728}, {164,  45},
++    {236,  46}, {221,  47}, {653, 509}, {110,  49}, { 50,  54},
++    { 51,  62}, {253,  52}, {252,  53}, {510, 716}, { 55,  58},
++    { 56, 279}, {269,  57}, {721, 511}, {271,  59}, { 60,  65},
++    {753,  61}, {514, 512}, {260,  63}, { 64, 285}, {513, 750},
++    {284,  66}, {515, 770}, {135,  68}, {245,  69}, {217,  70},
++    {516, 581}, {788, 517}, { 73,  74}, {519, 536}, { 75, 115},
++    {520, 552}, {554,  77}, {569, 521}, { 79, 119}, {118,  80},
++    {522, 588}, { 82, 167}, {150,  83}, {523, 584}, { 85, 125},
++    {122,  86}, {212,  87}, {223,  88}, {533, 524}, { 90, 129},
++    { 91, 155}, { 92, 226}, {720, 525}, {627, 526}, { 95, 158},
++    {230,  96}, { 97, 214}, {690, 527}, {204,  99}, {274, 100},
++    {528, 580}, {529, 729}, {103, 137}, {104, 183}, {105, 162},
++    {161, 106}, {530, 706}, {146, 108}, {109, 186}, {759, 531},
++    {209, 111}, {112, 238}, {222, 113}, {267, 114}, {532, 682},
++    {553, 534}, {117, 148}, {570, 538}, {539, 572}, {149, 120},
++    {171, 121}, {540, 603}, {123, 151}, {286, 124}, {780, 541},
++    {172, 126}, {127, 153}, {128, 262}, {542, 592}, {130, 177},
++    {131, 229}, {626, 543}, {179, 133}, {134, 157}, {544, 659},
++    {136, 194}, {724, 545}, {138, 143}, {139, 206}, {140, 247},
++    {695, 546}, {273, 142}, {547, 726}, {196, 144}, {266, 145},
++    {548, 614}, {208, 147}, {549, 760}, {571, 555}, {556, 589},
++    {605, 557}, {152, 189}, {621, 558}, {227, 154}, {559, 585},
++    {190, 156}, {560, 641}, {561, 611}, {159, 181}, {160, 193},
++    {628, 562}, {688, 563}, {163, 195}, {630, 565}, {233, 165},
++    {166, 256}, {600, 566}, {168, 287}, {567, 777}, {199, 170},
++    {568, 574}, {573, 604}, {173, 200}, {174, 216}, {575, 783},
++    {270, 176}, {624, 576}, {243, 178}, {577, 610}, {242, 180},
++    {658, 578}, {182, 203}, {579, 689}, {184, 224}, {185, 265},
++    {742, 582}, {664, 583}, {586, 587}, {590, 601}, {607, 591},
++    {593, 737}, {198, 192}, {594, 643}, {595, 671}, {772, 596},
++    {597, 598}, {248, 197}, {679, 599}, {602, 657}, {606, 778},
++    {241, 201}, {608, 669}, {609, 625}, {723, 612}, {205, 255},
++    {646, 613}, {207, 232}, {615, 680}, {705, 616}, {249, 210},
++    {257, 211}, {714, 617}, {213, 215}, {618, 782}, {619, 676},
++    {622, 620}, {623, 784}, {629, 645}, {219, 220}, {631, 711},
++    {632, 758}, {756, 633}, {634, 251}, {781, 635}, {275, 225},
++    {710, 636}, {637, 754}, {639, 638}, {640, 787}, {642, 655},
++    {231, 244}, {674, 644}, {757, 647}, {235, 234}, {730, 648},
++    {745, 649}, {276, 237}, {762, 650}, {258, 239}, {240, 281},
++    {699, 651}, {652, 773}, {672, 654}, {656, 771}, {675, 660},
++    {692, 246}, {691, 661}, {662, 743}, {663, 744}, {250, 277},
++    {666, 665}, {667, 763}, {715, 668}, {278, 254}, {748, 670},
++    {678, 677}, {681, 697}, {683, 747}, {259, 268}, {684, 732},
++    {263, 261}, {685, 734}, {686, 785}, {687, 718}, {693, 722},
++    {694, 741}, {696, 739}, {698, 701}, {731, 700}, {702, 751},
++    {786, 703}, {283, 272}, {736, 704}, {725, 707}, {740, 708},
++    {709, 727}, {712, 761}, {713, 746}, {717, 764}, {282, 280},
++    {768, 719}, {749, 733}, {735, 767}, {738, 752}, {769, 755},
++    {765, 766}, {779, 774}, {775, 776},
++};
++
++const uint16_t (*const SPECTRUM_TREES[])[2] =
++{
++    SPECTRUM1_TREE,
++    SPECTRUM2_TREE,
++    SPECTRUM3_TREE,
++    SPECTRUM4_TREE,
++    SPECTRUM5_TREE,
++    SPECTRUM6_TREE,
++    SPECTRUM7_TREE,
++    SPECTRUM8_TREE,
++    SPECTRUM9_TREE,
++    SPECTRUM10_TREE,
++    SPECTRUM11_TREE,
++};
++
++inline uint16_t DecodeBits(const uint16_t (*const tree)[2], const uint8_t *data, size_t &pos)
++{
++    // <500: node, else: leaf
++    uint16_t index = 0;
++    do {
++        index = tree[index][extract_bit(data, pos++)];
++    }
++    while (index < 500);
++    return index - 500;
++}
++}
++
++namespace Huffman
++{
++int DecodeScalefactorBits(const uint8_t *data, size_t &pos)
++{
++    // ISO/IEC 13818-7 Scalefactor Huffman codebook parameters
++    return DecodeBits(SCALEFACTOR_TREE, data, pos) - 60;
++}
++
++void DecodeSpectrumQuadBits(int codebook, const uint8_t *data, size_t &pos, int &unsigned_, int &w, int &x, int &y, int &z)
++{
++    // ISO/IEC 13818-7 Spectrum Huffman codebooks parameters
++    uint16_t index = DecodeBits(SPECTRUM_TREES[codebook], data, pos);
++    int un = codebook >= 2;
++    unsigned_ = un;
++    w = index / 27 + un - 1;
++    x = index / 9 % 3 + un - 1;
++    y = index / 3 % 3 + un - 1;
++    z = index % 3 + un - 1;
++}
++
++void DecodeSpectrumPairBits(int codebook, const uint8_t *data, size_t &pos, int &unsigned_, int &y, int &z)
++{
++    // ISO/IEC 13818-7 Spectrum Huffman codebooks parameters
++    uint16_t index = DecodeBits(SPECTRUM_TREES[codebook], data, pos);
++    int mod = codebook >= 10 ? 17 : codebook >= 8 ? 13 : codebook >= 6 ? 8 : 9;
++    int un = codebook >= 6;
++    unsigned_ = un;
++    y = index / mod + un * 4 - 4;
++    z = index % mod + un * 4 - 4;
++}
++}
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/huffman.hpp b/modules/stream_filter/arib_dualmono/tsreadex/huffman.hpp
+new file mode 100644
+index 0000000000..777814c979
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/huffman.hpp
+@@ -0,0 +1,18 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#ifndef INCLUDE_HUFFMAN_HPP
++#define INCLUDE_HUFFMAN_HPP
++
++#include <stddef.h>
++#include <stdint.h>
++
++namespace Huffman
++{
++const size_t MAX_CODEWORD_LEN = 19;
++int DecodeScalefactorBits(const uint8_t *data, size_t &pos);
++void DecodeSpectrumQuadBits(int codebook, const uint8_t *data, size_t &pos, int &unsigned_, int &w, int &x, int &y, int &z);
++void DecodeSpectrumPairBits(int codebook, const uint8_t *data, size_t &pos, int &unsigned_, int &y, int &z);
++}
++
++#endif
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.cpp b/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.cpp
+new file mode 100644
+index 0000000000..8da99153b6
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.cpp
+@@ -0,0 +1,991 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#include "servicefilter.hpp"
++#include "aac.hpp"
++#include <algorithm>
++
++CServiceFilter::CServiceFilter()
++    : m_programNumberOrIndex(0)
++    , m_audio1Mode(0)
++    , m_audio2Mode(0)
++    , m_audio1MuxToStereo(false)
++    , m_audio2MuxToStereo(false)
++    , m_audio1MuxDualMono(false)
++    , m_captionMode(0)
++    , m_superimposeMode(0)
++    , m_captionInsertManagementPacket(false)
++    , m_superimposeInsertManagementPacket(false)
++    , m_videoPid(0)
++    , m_audio1Pid(0)
++    , m_audio2Pid(0)
++    , m_audio1StreamType(0)
++    , m_audio2StreamType(0)
++    , m_captionPid(0)
++    , m_superimposePid(0)
++    , m_pcrPid(0)
++    , m_pcr(-1)
++    , m_patCounter(0)
++    , m_pmtCounter(0)
++    , m_audio1PesCounter(0)
++    , m_audio2PesCounter(0)
++    , m_captionPesCounter(0xff)
++    , m_superimposePesCounter(0xff)
++    , m_isAudio1DualMono(false)
++    , m_audio1Pts(-1)
++    , m_audio2Pts(-1)
++    , m_audio1PtsPcrDiff(0)
++    , m_audio2PtsPcrDiff(-1)
++    , m_captionManagementPcr(-1)
++    , m_superimposeManagementPcr(-1)
++{
++    static const PAT zeroPat = {};
++    m_pat = zeroPat;
++    m_pmtPsi = zeroPat.psi;
++}
++
++void CServiceFilter::SetAudio1Mode(int mode)
++{
++    m_audio1Mode = mode % 4;
++    m_audio1MuxToStereo = !!(mode & 4);
++    m_audio1MuxDualMono = !!(mode & 8);
++}
++
++void CServiceFilter::SetAudio2Mode(int mode)
++{
++    m_audio2Mode = mode % 4;
++    m_audio2MuxToStereo = !!(mode & 4);
++}
++
++void CServiceFilter::SetCaptionMode(int mode)
++{
++    m_captionMode = mode % 4;
++    m_captionInsertManagementPacket = !!(mode & 4);
++}
++
++void CServiceFilter::SetSuperimposeMode(int mode)
++{
++    m_superimposeMode = mode % 4;
++    m_superimposeInsertManagementPacket = !!(mode & 4);
++}
++
++void CServiceFilter::AddPacket(const uint8_t *packet)
++{
++    if (m_programNumberOrIndex == 0) {
++        m_packets.insert(m_packets.end(), packet, packet + 188);
++        return;
++    }
++
++    int unitStart = extract_ts_header_unit_start(packet);
++    int pid = extract_ts_header_pid(packet);
++    int adaptation = extract_ts_header_adaptation(packet);
++    int counter = extract_ts_header_counter(packet);
++    int payloadSize = get_ts_payload_size(packet);
++    const uint8_t *payload = packet + 188 - payloadSize;
++
++    if (pid == 0) {
++        extract_pat(&m_pat, payload, payloadSize, unitStart, counter);
++        auto itPmt = FindTargetPmtRef(m_pat.pmt);
++        if (itPmt != m_pat.pmt.end()) {
++            if (unitStart) {
++                AddPat(m_pat.transport_stream_id, itPmt->program_number, FindNitRef(m_pat.pmt) != m_pat.pmt.end());
++            }
++        }
++        else {
++            m_videoPid = 0;
++            m_audio1Pid = 0;
++            m_audio2Pid = 0;
++            m_captionPid = 0;
++            m_superimposePid = 0;
++            m_pcrPid = 0;
++            m_pcr = -1;
++        }
++    }
++    else {
++        auto itPmt = FindTargetPmtRef(m_pat.pmt);
++        if (itPmt != m_pat.pmt.end()) {
++            if (pid == itPmt->pmt_pid) {
++                int done;
++                do {
++                    done = extract_psi(&m_pmtPsi, payload, payloadSize, unitStart, counter);
++                    if (m_pmtPsi.version_number && m_pmtPsi.table_id == 2 && m_pmtPsi.current_next_indicator) {
++                        AddPmt(m_pmtPsi);
++                    }
++                }
++                while (!done);
++            }
++            if (pid == m_pcrPid) {
++                if (adaptation & 2) {
++                    int adaptationLength = packet[4];
++                    if (adaptationLength >= 6 && !!(packet[5] & 0x10)) {
++                        if (pid != m_videoPid &&
++                            pid != m_audio1Pid &&
++                            pid != m_audio2Pid &&
++                            pid != m_captionPid &&
++                            pid != m_superimposePid) {
++                            AddPcrAdaptation(packet + 6);
++                        }
++                        m_pcr = (packet[10] >> 7) |
++                                (packet[9] << 1) |
++                                (packet[8] << 9) |
++                                (packet[7] << 17) |
++                                (static_cast<int64_t>(packet[6]) << 25);
++                        if (m_audio1Mode == 1 && m_audio1Pid == 0) {
++                            AddAudioPesPackets(m_isAudio1DualMono ? 2 : 0, (m_pcr + m_audio1PtsPcrDiff) & 0x1ffffffff, m_audio1Pts, m_audio1PesCounter);
++                        }
++                        if ((m_audio2Mode == 1 || (m_audio2Mode == 3 && m_audio1Pid == 0)) && m_audio2Pid == 0 && !m_isAudio1DualMono) {
++                            if (m_audio2PtsPcrDiff < 0) {
++                                m_audio2PtsPcrDiff = m_audio1PtsPcrDiff;
++                            }
++                            AddAudioPesPackets(m_isAudio1DualMono ? 3 : 1, (m_pcr + m_audio2PtsPcrDiff) & 0x1ffffffff, m_audio2Pts, m_audio2PesCounter);
++                        }
++
++                        static const int INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC = 15;
++                        static const int INSERT_MANAGEMENT_INTERVAL_SEC = INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC - 5;
++                        if (m_captionManagementPcr >= 0 &&
++                            m_captionInsertManagementPacket &&
++                            (m_captionPid != 0 || m_captionMode == 1)) {
++                            int64_t pcrDiff = (0x200000000 + m_pcr - m_captionManagementPcr) & 0x1ffffffff;
++                            if (pcrDiff > 90000 * INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC) {
++                                if (pcrDiff < 90000 * INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC * 2) {
++                                    m_captionPesCounter = (m_captionPesCounter + 1) & 0x0f;
++                                    AddCaptionManagementPesPacket(m_pcr, m_captionPesCounter);
++                                }
++                                m_captionManagementPcr = (0x200000000 + m_pcr - 90000 * INSERT_MANAGEMENT_INTERVAL_SEC) & 0x1ffffffff;
++                            }
++                        }
++                        else {
++                            m_captionManagementPcr = m_pcr;
++                        }
++                        if (m_superimposeManagementPcr >= 0 &&
++                            m_superimposeInsertManagementPacket &&
++                            (m_superimposePid != 0 || m_superimposeMode == 1)) {
++                            int64_t pcrDiff = (0x200000000 + m_pcr - m_superimposeManagementPcr) & 0x1ffffffff;
++                            if (pcrDiff > 90000 * INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC) {
++                                if (pcrDiff < 90000 * INSERT_MANAGEMENT_DETERMINE_ABSENCE_SEC * 2) {
++                                    m_superimposePesCounter = (m_superimposePesCounter + 1) & 0x0f;
++                                    AddSuperimposeManagementPesPacket(m_superimposePesCounter);
++                                }
++                                m_superimposeManagementPcr = (0x200000000 + m_pcr - 90000 * INSERT_MANAGEMENT_INTERVAL_SEC) & 0x1ffffffff;
++                            }
++                        }
++                        else {
++                            m_superimposeManagementPcr = m_pcr;
++                        }
++                    }
++                }
++            }
++            if (pid == m_videoPid) {
++                ChangePidAndAddPacket(packet, 0x0100);
++            }
++            else if (pid == m_audio1Pid) {
++                if (AccumulatePesPackets(m_audio1UnitPackets, packet, unitStart)) {
++                    bool passthroughAudio1 = false;
++                    bool copyToAudio2 = false;
++                    m_isAudio1DualMono = m_audio1MuxDualMono && m_audio1StreamType == ADTS_TRANSPORT && TransmuxDualMono(m_audio1UnitPackets);
++                    if (m_isAudio1DualMono) {
++                        // Already added
++                        m_audio1UnitPackets.clear();
++                    }
++                    else {
++                        passthroughAudio1 = !m_audio1MuxToStereo || m_audio1StreamType != ADTS_TRANSPORT ||
++                                            !TransmuxMonoToStereo(m_audio1UnitPackets, m_audio1MuxWorkspace, 0x0110, m_audio1PesCounter, m_audio1PtsPcrDiff);
++                        // Copy audio1 to audio2 if needed
++                        copyToAudio2 = m_audio2Mode == 3 && m_audio2Pid == 0;
++                        if (copyToAudio2 && m_audio2MuxToStereo && m_audio1StreamType == ADTS_TRANSPORT &&
++                            TransmuxMonoToStereo(m_audio1UnitPackets, m_audio2MuxWorkspace, 0x0111, m_audio2PesCounter, m_audio2PtsPcrDiff)) {
++                            // Already added
++                            copyToAudio2 = false;
++                        }
++                        if (!passthroughAudio1 && !copyToAudio2) {
++                            m_audio1UnitPackets.clear();
++                        }
++                    }
++                    // Add packets
++                    for (size_t i = 0; i + 188 <= m_audio1UnitPackets.size(); i += 188) {
++                        const uint8_t *packet_ = m_audio1UnitPackets.data() + i;
++                        int payloadSize_ = get_ts_payload_size(packet_);
++                        const uint8_t *payload_ = packet_ + 188 - payloadSize_;
++                        int64_t pts = GetAudioPresentationTimeStamp(i == 0, payload_, payloadSize_);
++                        if (passthroughAudio1) {
++                            if (pts >= 0 && m_pcr >= 0) {
++                                m_audio1PtsPcrDiff = 0x200000000 + pts - m_pcr;
++                            }
++                            m_audio1PesCounter = (m_audio1PesCounter + 1) & 0x0f;
++                            ChangePidAndAddPacket(packet_, m_isAudio1DualMono ? 0x0112 : 0x0110, m_audio1PesCounter);
++                        }
++                        if (copyToAudio2) {
++                            // Copy audio1 to audio2
++                            if (pts >= 0 && m_pcr >= 0) {
++                                m_audio2PtsPcrDiff = 0x200000000 + pts - m_pcr;
++                            }
++                            m_audio2PesCounter = (m_audio2PesCounter + 1) & 0x0f;
++                            ChangePidAndAddPacket(packet_, m_isAudio1DualMono ? 0x0113 : 0x0111, m_audio2PesCounter);
++                        }
++                    }
++                    m_audio1UnitPackets.clear();
++                }
++            }
++            else if (pid == m_audio2Pid) {
++                if (AccumulatePesPackets(m_audio2UnitPackets, packet, unitStart)) {
++                    if (m_audio2MuxToStereo && m_audio2StreamType == ADTS_TRANSPORT &&
++                        TransmuxMonoToStereo(m_audio2UnitPackets, m_audio2MuxWorkspace, 0x0111, m_audio2PesCounter, m_audio2PtsPcrDiff)) {
++                        // Already added
++                        m_audio2UnitPackets.clear();
++                    }
++                    // Add packets
++                    for (size_t i = 0; i + 188 <= m_audio2UnitPackets.size(); i += 188) {
++                        const uint8_t *packet_ = m_audio2UnitPackets.data() + i;
++                        int payloadSize_ = get_ts_payload_size(packet_);
++                        const uint8_t *payload_ = packet_ + 188 - payloadSize_;
++                        int64_t pts = GetAudioPresentationTimeStamp(i == 0, payload_, payloadSize_);
++                        if (pts >= 0 && m_pcr >= 0) {
++                            m_audio2PtsPcrDiff = 0x200000000 + pts - m_pcr;
++                        }
++                        m_audio2PesCounter = (m_audio2PesCounter + 1) & 0x0f;
++                        ChangePidAndAddPacket(packet_, m_isAudio1DualMono ? 0x0113 : 0x0111, m_audio2PesCounter);
++                    }
++                    m_audio2UnitPackets.clear();
++                }
++            }
++            else if (pid == m_captionPid) {
++                m_captionManagementPcr = m_pcr;
++                m_captionPesCounter = m_captionPesCounter > 0x0f ? 0x10 | (counter & 0x0f) : (m_captionPesCounter + 1) & 0x0f;
++                ChangePidAndAddPacket(packet, 0x0130, m_captionPesCounter & 0x0f);
++            }
++            else if (pid == m_superimposePid) {
++                m_superimposeManagementPcr = m_pcr;
++                m_superimposePesCounter = m_superimposePesCounter > 0x0f ? 0x10 | (counter & 0x0f) : (m_superimposePesCounter + 1) & 0x0f;
++                ChangePidAndAddPacket(packet, 0x0138, m_superimposePesCounter & 0x0f);
++            }
++            else if (pid < 0x0030) {
++                m_packets.insert(m_packets.end(), packet, packet + 188);
++            }
++            else {
++                auto itNit = FindNitRef(m_pat.pmt);
++                if (itNit != m_pat.pmt.end() && pid == itNit->pmt_pid) {
++                    // NIT pid should be 0x0010. This case is unusual.
++                    ChangePidAndAddPacket(packet, 0x0010);
++                }
++            }
++        }
++    }
++}
++
++std::vector<PMT_REF>::const_iterator CServiceFilter::FindNitRef(const std::vector<PMT_REF> &pmt)
++{
++    return std::find_if(pmt.begin(), pmt.end(), [](const PMT_REF &a) { return a.program_number == 0; });
++}
++
++std::vector<PMT_REF>::const_iterator CServiceFilter::FindTargetPmtRef(const std::vector<PMT_REF> &pmt) const
++{
++    if (m_programNumberOrIndex < 0) {
++        int index = -m_programNumberOrIndex;
++        for (auto it = pmt.begin(); it != pmt.end(); ++it) {
++            if (it->program_number != 0) {
++                if (--index == 0) {
++                    return it;
++                }
++            }
++        }
++        return pmt.end();
++    }
++    return std::find_if(pmt.begin(), pmt.end(), [=](const PMT_REF &a) { return a.program_number == m_programNumberOrIndex; });
++}
++
++void CServiceFilter::AddPat(int transportStreamID, int programNumber, bool addNit)
++{
++    // Create PAT
++    m_buf.assign(9, 0);
++    m_buf[1] = 0x00;
++    m_buf[2] = 0xb0;
++    m_buf[3] = addNit ? 17 : 13;
++    m_buf[4] = static_cast<uint8_t>(transportStreamID >> 8);
++    m_buf[5] = static_cast<uint8_t>(transportStreamID);
++    m_buf[6] = m_lastPat.size() > 6 ? m_lastPat[6] : 0xc1;
++    if (addNit) {
++        m_buf.push_back(0);
++        m_buf.push_back(0);
++        m_buf.push_back(0xe0);
++        m_buf.push_back(0x10);
++    }
++    m_buf.push_back(static_cast<uint8_t>(programNumber >> 8));
++    m_buf.push_back(static_cast<uint8_t>(programNumber));
++    // PMT_PID=0x01f0
++    m_buf.push_back(0xe1);
++    m_buf.push_back(0xf0);
++    if (m_lastPat.size() == m_buf.size() + 4 &&
++        std::equal(m_buf.begin(), m_buf.end(), m_lastPat.begin())) {
++        // Copy CRC
++        m_buf.insert(m_buf.end(), m_lastPat.end() - 4, m_lastPat.end());
++    }
++    else {
++        // Increment version number
++        m_buf[6] = 0xc1 | (((m_buf[6] >> 1) + 1) & 0x1f) << 1;
++        uint32_t crc = calc_crc32(m_buf.data() + 1, static_cast<int>(m_buf.size() - 1));
++        m_buf.push_back(crc >> 24);
++        m_buf.push_back((crc >> 16) & 0xff);
++        m_buf.push_back((crc >> 8) & 0xff);
++        m_buf.push_back(crc & 0xff);
++        m_lastPat = m_buf;
++    }
++
++    // Create TS packet
++    m_packets.push_back(0x47);
++    m_packets.push_back(0x40);
++    m_packets.push_back(0x00);
++    m_patCounter = (m_patCounter + 1) & 0x0f;
++    m_packets.push_back(0x10 | m_patCounter);
++    m_packets.insert(m_packets.end(), m_buf.begin(), m_buf.end());
++    m_packets.resize((m_packets.size() / 188 + 1) * 188, 0xff);
++}
++
++void CServiceFilter::AddPmt(const PSI &psi)
++{
++    if (psi.section_length < 9) {
++        return;
++    }
++    const uint8_t *table = psi.data;
++    int programNumber = (table[3] << 8) | table[4];
++    m_pcrPid = ((table[8] & 0x1f) << 8) | table[9];
++    if (m_pcrPid == 0x1fff) {
++        m_pcr = -1;
++    }
++    int programInfoLength = ((table[10] & 0x03) << 8) | table[11];
++    int pos = 3 + 9 + programInfoLength;
++    if (psi.section_length < pos) {
++        return;
++    }
++
++    // Create PMT
++    m_buf.assign(13, 0);
++    m_buf[1] = 0x02;
++    m_buf[4] = static_cast<uint8_t>(programNumber >> 8);
++    m_buf[5] = static_cast<uint8_t>(programNumber);
++    m_buf[6] = m_lastPmt.size() > 6 ? m_lastPmt[6] : 0xc1;
++    // PCR_PID=0x01ff
++    m_buf[9] = 0xe1;
++    m_buf[10] = 0xff;
++    m_buf[11] = 0xf0 | static_cast<uint8_t>(programInfoLength >> 8);
++    m_buf[12] = static_cast<uint8_t>(programInfoLength);
++    // Copy 1st descriptor loop
++    m_buf.insert(m_buf.end(), table + 12, table + pos);
++
++    int lastAudio1Pid = m_audio1Pid;
++    int lastAudio2Pid = m_audio2Pid;
++    m_videoPid = 0;
++    m_audio1Pid = 0;
++    m_audio2Pid = 0;
++    m_captionPid = 0;
++    m_superimposePid = 0;
++    m_audio1StreamType = ADTS_TRANSPORT;
++    m_audio2StreamType = ADTS_TRANSPORT;
++    int videoDescPos = 0;
++    int audio1DescPos = 0;
++    int audio2DescPos = 0;
++    int captionDescPos = 0;
++    int superimposeDescPos = 0;
++    bool maybeCProfile = false;
++    bool audio1ComponentTagUnknown = true;
++
++    int tableLen = 3 + psi.section_length - 4/*CRC32*/;
++    while (pos + 4 < tableLen) {
++        uint8_t streamType = table[pos];
++        int esPid = ((table[pos + 1] & 0x1f) << 8) | table[pos + 2];
++        int esInfoLength = ((table[pos + 3] & 0x03) << 8) | table[pos + 4];
++        if (pos + 5 + esInfoLength <= tableLen) {
++            int componentTag = 0xff;
++            for (int i = pos + 5; i + 2 < pos + 5 + esInfoLength; i += 2 + table[i + 1]) {
++                // stream_identifier_descriptor
++                if (table[i] == 0x52) {
++                    componentTag = table[i + 2];
++                    break;
++                }
++            }
++            if (streamType == H_262_VIDEO ||
++                streamType == AVC_VIDEO ||
++                streamType == H_265_VIDEO) {
++                if ((m_videoPid == 0 && componentTag == 0xff) || componentTag == 0x00 || componentTag == 0x81) {
++                    m_videoPid = esPid;
++                    videoDescPos = pos;
++                    maybeCProfile = componentTag == 0x81;
++                }
++            }
++            else if (streamType == ADTS_TRANSPORT) {
++                if ((m_audio1Pid == 0 && componentTag == 0xff) || componentTag == 0x10 || componentTag == 0x83 || componentTag == 0x85) {
++                    m_audio1Pid = esPid;
++                    m_audio1StreamType = streamType;
++                    audio1DescPos = pos;
++                    audio1ComponentTagUnknown = componentTag == 0xff;
++                }
++                else if (componentTag == 0x11) {
++                    if (m_audio2Mode != 2) {
++                        m_audio2Pid = esPid;
++                        m_audio2StreamType = streamType;
++                        audio2DescPos = pos;
++                    }
++                }
++            }
++            else if (streamType == MPEG2_AUDIO) {
++                if (m_audio1Pid == 0) {
++                    m_audio1Pid = esPid;
++                    m_audio1StreamType = streamType;
++                    audio1DescPos = pos;
++                    audio1ComponentTagUnknown = false;
++                }
++                else if (m_audio2Pid == 0) {
++                    if (m_audio2Mode != 2) {
++                        m_audio2Pid = esPid;
++                        m_audio2StreamType = streamType;
++                        audio2DescPos = pos;
++                    }
++                }
++            }
++            else if (streamType == PES_PRIVATE_DATA) {
++                if (componentTag == 0x30 || componentTag == 0x87) {
++                    if (m_captionMode != 2) {
++                        m_captionPid = esPid;
++                        captionDescPos = pos;
++                    }
++                }
++                else if (componentTag == 0x38 || componentTag == 0x88) {
++                    if (m_superimposeMode != 2) {
++                        m_superimposePid = esPid;
++                        superimposeDescPos = pos;
++                    }
++                }
++            }
++        }
++        pos += 5 + esInfoLength;
++    }
++
++    if (m_audio1Pid != lastAudio1Pid) {
++        m_audio1Pts = -1;
++        m_isAudio1DualMono = false;
++        m_audio1UnitPackets.clear();
++        m_audio1MuxWorkspace.clear();
++        m_audio1MuxDualMonoWorkspace.clear();
++    }
++    if (m_audio2Pid != lastAudio2Pid) {
++        m_audio2Pts = -1;
++        m_audio2UnitPackets.clear();
++        m_audio2MuxWorkspace.clear();
++    }
++
++    if (m_videoPid != 0) {
++        m_buf.push_back(table[videoDescPos]);
++        // PID=0x0100
++        m_buf.push_back(0xe1);
++        m_buf.push_back(0x00);
++        int esInfoLength = ((table[videoDescPos + 3] & 0x03) << 8) | table[videoDescPos + 4];
++        m_buf.insert(m_buf.end(), table + videoDescPos + 3, table + videoDescPos + 5 + esInfoLength);
++        if (m_pcrPid == m_videoPid) {
++            m_buf[9] = 0xe1;
++            m_buf[10] = 0x00;
++        }
++    }
++    bool addAudio2 = m_audio2Pid != 0 || m_audio2Mode == 1 || m_audio2Mode == 3 || (m_audio2Mode != 2 && m_isAudio1DualMono);
++    if (m_audio2Mode == 3 && m_audio1Pid != 0 && m_audio2Pid == 0) {
++        // Copy stream type
++        m_audio2StreamType = m_audio1StreamType;
++    }
++
++    if (m_audio1Pid != 0 || m_audio1Mode == 1) {
++        m_buf.push_back(m_audio1StreamType);
++        // PID=0x0110/0x0112
++        m_buf.push_back(0xe1);
++        m_buf.push_back(m_isAudio1DualMono ? 0x12 : 0x10);
++        if (m_audio1Pid != 0) {
++            int esInfoLength = ((table[audio1DescPos + 3] & 0x03) << 8) | table[audio1DescPos + 4];
++            if (audio1ComponentTagUnknown && addAudio2) {
++                int esInfoNewLength = esInfoLength + 3;
++                m_buf.push_back(0xf0 | static_cast<uint8_t>(esInfoNewLength >> 8));
++                m_buf.push_back(static_cast<uint8_t>(esInfoNewLength));
++                m_buf.push_back(0x52);
++                m_buf.push_back(1);
++                m_buf.push_back(maybeCProfile ? 0x83 : 0x10);
++            }
++            else {
++                m_buf.push_back(0xf0 | static_cast<uint8_t>(esInfoLength >> 8));
++                m_buf.push_back(static_cast<uint8_t>(esInfoLength));
++            }
++            m_buf.insert(m_buf.end(), table + audio1DescPos + 5, table + audio1DescPos + 5 + esInfoLength);
++            if (m_pcrPid == m_audio1Pid) {
++                m_buf[9] = 0xe1;
++                m_buf[10] = m_isAudio1DualMono ? 0x12 : 0x10;
++            }
++        }
++        else {
++            m_buf.push_back(0xf0);
++            m_buf.push_back(3);
++            m_buf.push_back(0x52);
++            m_buf.push_back(1);
++            m_buf.push_back(maybeCProfile ? 0x83 : 0x10);
++        }
++    }
++    if (addAudio2) {
++        m_buf.push_back(m_audio2StreamType);
++        // PID=0x0111/0x0113
++        m_buf.push_back(0xe1);
++        m_buf.push_back(m_isAudio1DualMono ? 0x13 : 0x11);
++        if (m_audio2Pid != 0) {
++            int esInfoLength = ((table[audio2DescPos + 3] & 0x03) << 8) | table[audio2DescPos + 4];
++            m_buf.insert(m_buf.end(), table + audio2DescPos + 3, table + audio2DescPos + 5 + esInfoLength);
++            if (m_pcrPid == m_audio2Pid) {
++                m_buf[9] = 0xe1;
++                m_buf[10] = m_isAudio1DualMono ? 0x13 : 0x11;
++            }
++        }
++        else {
++            m_buf.push_back(0xf0);
++            m_buf.push_back(3);
++            m_buf.push_back(0x52);
++            m_buf.push_back(1);
++            m_buf.push_back(maybeCProfile ? 0x85 : 0x11);
++        }
++    }
++    if (m_captionPid != 0 || m_captionMode == 1) {
++        m_buf.push_back(PES_PRIVATE_DATA);
++        // PID=0x0130
++        m_buf.push_back(0xe1);
++        m_buf.push_back(0x30);
++        if (m_captionPid != 0) {
++            int esInfoLength = ((table[captionDescPos + 3] & 0x03) << 8) | table[captionDescPos + 4];
++            m_buf.insert(m_buf.end(), table + captionDescPos + 3, table + captionDescPos + 5 + esInfoLength);
++            if (m_pcrPid == m_captionPid) {
++                m_buf[9] = 0xe1;
++                m_buf[10] = 0x30;
++            }
++        }
++        else {
++            m_buf.push_back(0xf0);
++            m_buf.push_back(3 + (maybeCProfile ? 0 : 5));
++            m_buf.push_back(0x52);
++            m_buf.push_back(1);
++            m_buf.push_back(maybeCProfile ? 0x87 : 0x30);
++            if (!maybeCProfile) {
++                // data_component_descriptor
++                m_buf.push_back(0xfd);
++                m_buf.push_back(3);
++                m_buf.push_back(0x00);
++                m_buf.push_back(0x08);
++                m_buf.push_back(0x3d);
++            }
++        }
++    }
++    if (m_superimposePid != 0 || m_superimposeMode == 1) {
++        m_buf.push_back(PES_PRIVATE_DATA);
++        // PID=0x0138
++        m_buf.push_back(0xe1);
++        m_buf.push_back(0x38);
++        if (m_superimposePid != 0) {
++            int esInfoLength = ((table[superimposeDescPos + 3] & 0x03) << 8) | table[superimposeDescPos + 4];
++            m_buf.insert(m_buf.end(), table + superimposeDescPos + 3, table + superimposeDescPos + 5 + esInfoLength);
++            if (m_pcrPid == m_superimposePid) {
++                m_buf[9] = 0xe1;
++                m_buf[10] = 0x38;
++            }
++        }
++        else {
++            m_buf.push_back(0xf0);
++            m_buf.push_back(3 + (maybeCProfile ? 0 : 5));
++            // component_tag=0x38
++            m_buf.push_back(0x52);
++            m_buf.push_back(1);
++            m_buf.push_back(maybeCProfile ? 0x88 : 0x38);
++            if (!maybeCProfile) {
++                // data_component_descriptor
++                m_buf.push_back(0xfd);
++                m_buf.push_back(3);
++                m_buf.push_back(0x00);
++                m_buf.push_back(0x08);
++                m_buf.push_back(0x3c);
++            }
++        }
++    }
++
++    m_buf[2] = 0xb0 | static_cast<uint8_t>((m_buf.size() + 4 - 4) >> 8);
++    m_buf[3] = static_cast<uint8_t>(m_buf.size() + 4 - 4);
++
++    if (m_lastPmt.size() == m_buf.size() + 4 &&
++        std::equal(m_buf.begin(), m_buf.end(), m_lastPmt.begin())) {
++        // Copy CRC
++        m_buf.insert(m_buf.end(), m_lastPmt.end() - 4, m_lastPmt.end());
++    }
++    else {
++        // Increment version number
++        m_buf[6] = 0xc1 | (((m_buf[6] >> 1) + 1) & 0x1f) << 1;
++        uint32_t crc = calc_crc32(m_buf.data() + 1, static_cast<int>(m_buf.size() - 1));
++        m_buf.push_back(crc >> 24);
++        m_buf.push_back((crc >> 16) & 0xff);
++        m_buf.push_back((crc >> 8) & 0xff);
++        m_buf.push_back(crc & 0xff);
++        m_lastPmt = m_buf;
++    }
++
++    // Create TS packets
++    for (size_t i = 0; i < m_buf.size(); i += 184) {
++        m_packets.push_back(0x47);
++        // PMT_PID=0x01f0
++        m_packets.push_back((i == 0 ? 0x40 : 0) | 0x01);
++        m_packets.push_back(0xf0);
++        m_pmtCounter = (m_pmtCounter + 1) & 0x0f;
++        m_packets.push_back(0x10 | m_pmtCounter);
++        m_packets.insert(m_packets.end(), m_buf.begin() + i, m_buf.begin() + std::min(i + 184, m_buf.size()));
++        m_packets.resize(((m_packets.size() - 1) / 188 + 1) * 188, 0xff);
++    }
++}
++
++void CServiceFilter::AddPcrAdaptation(const uint8_t *pcr)
++{
++    // Create TS packet
++    m_packets.push_back(0x47);
++    // PCR_PID=0x01ff
++    m_packets.push_back(0x01);
++    m_packets.push_back(0xff);
++    m_packets.push_back(0x20);
++    m_packets.push_back(183);
++    m_packets.push_back(0x10);
++    m_packets.insert(m_packets.end(), pcr, pcr + 4);
++    // pcr_extension=0
++    m_packets.push_back((pcr[4] & 0x80) | 0x7e);
++    m_packets.push_back(0);
++    m_packets.resize((m_packets.size() / 188 + 1) * 188, 0xff);
++}
++
++void CServiceFilter::ChangePidAndAddPacket(const uint8_t *packet, int pid, uint8_t counter)
++{
++    m_packets.push_back(0x47);
++    m_packets.push_back((packet[1] & 0xe0) | static_cast<uint8_t>(pid >> 8));
++    m_packets.push_back(static_cast<uint8_t>(pid));
++    m_packets.push_back(counter > 0x0f ? packet[3] : ((packet[3] & 0xf0) | counter));
++    m_packets.insert(m_packets.end(), packet + 4, packet + 188);
++}
++
++void CServiceFilter::AddCaptionManagementPesPacket(int64_t pts, uint8_t counter)
++{
++    static const uint8_t SYNCHRONOUS_PES_JPN_MANAGEMENT[20] = {
++        0x80, 0xff, 0xf0, 0x80, 0x00, 0x00, 0x00, 0x0a,
++        0x3f, 0x01, 0x1a, 0x6a, 0x70, 0x6e, 0x80, 0x00, 0x00, 0x00,
++        0xe4, 0x6a
++    };
++    m_packets.push_back(0x47);
++    // PID=0x0130
++    m_packets.push_back(0x41);
++    m_packets.push_back(0x30);
++    m_packets.push_back(0x30 | counter);
++    m_packets.push_back(188 - 5 - (6 + 28));
++    m_packets.push_back(0x00);
++    // stuffing
++    m_packets.resize(m_packets.size() + 188 - 6 - (6 + 28), 0xff);
++    // PES
++    m_packets.push_back(0);
++    m_packets.push_back(0);
++    m_packets.push_back(1);
++    m_packets.push_back(0xbd);
++    m_packets.push_back(0);
++    m_packets.push_back(28);
++    m_packets.push_back(0x80);
++    // has PTS
++    m_packets.push_back(0x80);
++    m_packets.push_back(5);
++    m_packets.push_back(static_cast<uint8_t>(pts >> 29) | 0x21); // 3 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 22)); // 8 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 14) | 1); // 7 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 7)); // 8 bits
++    m_packets.push_back(static_cast<uint8_t>(pts << 1) | 1); // 7 bits
++    m_packets.insert(m_packets.end(), SYNCHRONOUS_PES_JPN_MANAGEMENT, SYNCHRONOUS_PES_JPN_MANAGEMENT + 20);
++}
++
++void CServiceFilter::AddSuperimposeManagementPesPacket(uint8_t counter)
++{
++    static const uint8_t ASYNCHRONOUS_PES_JPN_MANAGEMENT[20] = {
++        0x81, 0xff, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x0a,
++        0x3f, 0x01, 0x12, 0x6a, 0x70, 0x6e, 0x80, 0x00, 0x00, 0x00,
++        0xae, 0xa2
++    };
++    m_packets.push_back(0x47);
++    // PID=0x0138
++    m_packets.push_back(0x41);
++    m_packets.push_back(0x38);
++    m_packets.push_back(0x30 | counter);
++    m_packets.push_back(188 - 5 - (6 + 20));
++    m_packets.push_back(0x00);
++    // stuffing
++    m_packets.resize(m_packets.size() + 188 - 6 - (6 + 20), 0xff);
++    // PES
++    m_packets.push_back(0);
++    m_packets.push_back(0);
++    m_packets.push_back(1);
++    m_packets.push_back(0xbf);
++    m_packets.push_back(0);
++    m_packets.push_back(20);
++    m_packets.insert(m_packets.end(), ASYNCHRONOUS_PES_JPN_MANAGEMENT, ASYNCHRONOUS_PES_JPN_MANAGEMENT + 20);
++}
++
++void CServiceFilter::AddAudioPesPackets(uint8_t index, int64_t targetPts, int64_t &pts, uint8_t &counter)
++{
++    static const int ACCEPTABLE_PTS_DIFF_SEC = 10;
++
++    int64_t ptsDiff = (0x200000000 + targetPts - pts) & 0x1ffffffff;
++    if (pts < 0 || (90000 * ACCEPTABLE_PTS_DIFF_SEC < ptsDiff && ptsDiff < 0x200000000 - 90000 * ACCEPTABLE_PTS_DIFF_SEC)) {
++        pts = targetPts;
++    }
++    for (;;) {
++        int64_t nextPts = (pts + 90000 * 64 / 1000) & 0x1ffffffff;
++        if (((0x200000000 + targetPts - nextPts) & 0x1ffffffff) > 900000) {
++            break;
++        }
++        Add64MsecAudioPesPacket(index, pts, counter);
++        pts = nextPts;
++    }
++}
++
++void CServiceFilter::Add64MsecAudioPesPacket(uint8_t index, int64_t pts, uint8_t &counter)
++{
++    static const uint8_t ADTS_2CH_48KHZ_SILENT[13] = {
++        0xff, 0xf1, 0x4c, 0x80, 0x01, 0xbf, 0xfc, 0x21, 0x10, 0x04, 0x60, 0x8c, 0x1c
++    };
++    m_packets.push_back(0x47);
++    // PID=0x0110+index
++    m_packets.push_back(0x41);
++    m_packets.push_back(0x10 | index);
++    counter = (counter + 1) & 0x0f;
++    m_packets.push_back(0x30 | counter);
++    m_packets.push_back(188 - 5 - (6 + 8 + 13 * 3));
++    m_packets.push_back(0x40);
++    // stuffing
++    m_packets.resize(m_packets.size() + 188 - 6 - (6 + 8 + 13 * 3), 0xff);
++    // PES
++    m_packets.push_back(0);
++    m_packets.push_back(0);
++    m_packets.push_back(1);
++    m_packets.push_back(0xc0 | index);
++    m_packets.push_back(0);
++    m_packets.push_back(8 + 13 * 3);
++    // alignment by audio sync word
++    m_packets.push_back(0x84);
++    // has PTS
++    m_packets.push_back(0x80);
++    m_packets.push_back(5);
++    m_packets.push_back(static_cast<uint8_t>(pts >> 29) | 0x21); // 3 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 22)); // 8 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 14) | 1); // 7 bits
++    m_packets.push_back(static_cast<uint8_t>(pts >> 7)); // 8 bits
++    m_packets.push_back(static_cast<uint8_t>(pts << 1) | 1); // 7 bits
++    // 1024samples(1frame) / 48000hz * 3 = 0.064sec
++    for (int i = 0; i < 3; ++i) {
++        m_packets.insert(m_packets.end(), ADTS_2CH_48KHZ_SILENT, ADTS_2CH_48KHZ_SILENT + 13);
++    }
++}
++
++int64_t CServiceFilter::GetAudioPresentationTimeStamp(int unitStart, const uint8_t *payload, int payloadSize)
++{
++    if (unitStart && payloadSize >= 6 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1) {
++        int streamID = payload[3];
++        size_t pesPacketLength = (payload[4] << 8) | payload[5];
++        // audio stream
++        if ((streamID & 0xe0) == 0xc0 && pesPacketLength >= 3 && payloadSize >= 9) {
++            int ptsDtsFlags = payload[7] >> 6;
++            if (ptsDtsFlags >= 2 && pesPacketLength >= 8 && payloadSize >= 14) {
++                return (payload[13] >> 1) |
++                       (payload[12] << 7) |
++                       ((payload[11] & 0xfe) << 14) |
++                       (payload[10] << 22) |
++                       (static_cast<int64_t>(payload[9] & 0x0e) << 29);
++            }
++        }
++    }
++    return -1;
++}
++
++bool CServiceFilter::AccumulatePesPackets(std::vector<uint8_t> &unitPackets, const uint8_t *packet, int unitStart)
++{
++    if (unitStart) {
++        unitPackets.assign(packet, packet + 188);
++    }
++    // Cancel accumulations that are not possible for a regular (with a valid length field) PES
++    else if (!unitPackets.empty() && unitPackets.size() < 0x20000) {
++        unitPackets.insert(unitPackets.end(), packet, packet + 188);
++    }
++
++    // Check if PES has accumulated
++    int lastCounter = -1;
++    int entireSize = 0;
++    uint8_t head[6];
++    for (size_t i = 0; i + 188 <= unitPackets.size(); i += 188) {
++        const uint8_t *packet_ = unitPackets.data() + i;
++        int counter = extract_ts_header_counter(packet_);
++        if (lastCounter >= 0 && ((lastCounter + 1) & 0x0f) != counter) {
++            unitPackets.clear();
++            return false;
++        }
++        lastCounter = counter;
++
++        int payloadSize = get_ts_payload_size(packet_);
++        const uint8_t *payload = packet_ + 188 - payloadSize;
++        for (int j = 0; j < payloadSize && entireSize + j < 6; ++j) {
++            head[entireSize + j] = payload[j];
++        }
++        entireSize += payloadSize;
++        if (entireSize >= 6) {
++            if (head[0] != 0 || head[1] != 0 || head[2] != 1) {
++                unitPackets.clear();
++                return false;
++            }
++            int pesPacketLength = (head[4] << 8) | head[5];
++            if (entireSize >= 6 + pesPacketLength) {
++                return true;
++            }
++        }
++    }
++    return false;
++}
++
++void CServiceFilter::ConcatenatePayload(std::vector<uint8_t> &dest, const std::vector<uint8_t> &unitPackets, bool &pcrFlag, uint8_t (&pcr)[6])
++{
++    dest.clear();
++    pcrFlag = false;
++    for (size_t i = 0; i + 188 <= unitPackets.size(); i += 188) {
++        const uint8_t *packet = unitPackets.data() + i;
++        int adaptation = extract_ts_header_adaptation(packet);
++        if (adaptation & 2) {
++            int adaptationLength = packet[4];
++            if (adaptationLength >= 7 && !!(packet[5] & 0x10)) {
++                pcrFlag = true;
++                std::copy(packet + 6, packet + 12, pcr);
++            }
++        }
++        int payloadSize = get_ts_payload_size(packet);
++        const uint8_t *payload = packet + 188 - payloadSize;
++        dest.insert(dest.end(), payload, payload + payloadSize);
++    }
++}
++
++void CServiceFilter::AddAudioPesPackets(const std::vector<uint8_t> &pes, int pid, uint8_t &counter, int64_t &ptsPcrDiff, const uint8_t *pcr)
++{
++    for (size_t i = 0; i < pes.size(); ) {
++        m_packets.push_back(0x47);
++        m_packets.push_back((i == 0 ? 0x40 : 0) | static_cast<uint8_t>(pid >> 8));
++        m_packets.push_back(static_cast<uint8_t>(pid));
++        counter = (counter + 1) & 0x0f;
++        size_t len = std::min<size_t>(184, pes.size() - i);
++        if (pcr && i + len >= pes.size() && len > 176) {
++            // Reduce payload in order to insert PCR
++            len = 176;
++        }
++        m_packets.push_back((len < 184 ? 0x30 : 0x10) | counter);
++        if (len < 184) {
++            m_packets.push_back(static_cast<uint8_t>(183 - len));
++            if (len < 183) {
++                if (pcr && len <= 176) {
++                    // Insert PCR
++                    m_packets.push_back(0x10);
++                    m_packets.insert(m_packets.end(), pcr, pcr + 6);
++                    m_packets.insert(m_packets.end(), 176 - len, 0xff);
++                    pcr = nullptr;
++                }
++                else {
++                    m_packets.push_back(0x00);
++                    m_packets.insert(m_packets.end(), 182 - len, 0xff);
++                }
++            }
++        }
++        int64_t pts = GetAudioPresentationTimeStamp(i == 0, pes.data() + i, static_cast<int>(len));
++        if (pts >= 0 && m_pcr >= 0) {
++            ptsPcrDiff = 0x200000000 + pts - m_pcr;
++        }
++        m_packets.insert(m_packets.end(), pes.begin() + i, pes.begin() + i + len);
++        i += len;
++    }
++}
++
++bool CServiceFilter::TransmuxMonoToStereo(const std::vector<uint8_t> &unitPackets, std::vector<uint8_t> &workspace,
++                                          int pid, uint8_t &counter, int64_t &ptsPcrDiff)
++{
++    bool pcrFlag;
++    uint8_t pcr[6];
++    ConcatenatePayload(m_buf, unitPackets, pcrFlag, pcr);
++
++    if (m_buf.size() >= 6 && m_buf[0] == 0 && m_buf[1] == 0 && m_buf[2] == 1) {
++        int streamID = m_buf[3];
++        size_t pesPacketLength = (m_buf[4] << 8) | m_buf[5];
++        // audio stream
++        if ((streamID & 0xe0) == 0xc0 && m_buf.size() >= 6 + pesPacketLength && pesPacketLength >= 3) {
++            // PES has been accumulated
++            size_t pesPayloadPos = 9 + m_buf[8];
++            if (pesPayloadPos < 6 + pesPacketLength) {
++                m_buf.resize(6 + pesPacketLength);
++                if (Aac::TransmuxMonoToStereo(m_destLeftBuf, workspace, m_buf.data() + pesPayloadPos, m_buf.size() - pesPayloadPos) &&
++                    !m_destLeftBuf.empty()) {
++
++                    // Stereo
++                    m_buf.resize(pesPayloadPos);
++                    m_buf.insert(m_buf.end(), m_destLeftBuf.begin(), m_destLeftBuf.end());
++
++                    // Set length fields
++                    size_t pesLen = m_buf.size() - 6;
++                    m_buf[4] = static_cast<uint8_t>(pesLen >> 8);
++                    m_buf[5] = static_cast<uint8_t>(pesLen);
++                    AddAudioPesPackets(m_buf, pid, counter, ptsPcrDiff, pcrFlag ? pcr : nullptr);
++                    return true;
++                }
++            }
++        }
++    }
++    return false;
++}
++
++bool CServiceFilter::TransmuxDualMono(const std::vector<uint8_t> &unitPackets)
++{
++    bool pcrFlag;
++    uint8_t pcr[6];
++    ConcatenatePayload(m_buf, unitPackets, pcrFlag, pcr);
++
++    if (m_buf.size() >= 6 && m_buf[0] == 0 && m_buf[1] == 0 && m_buf[2] == 1) {
++        int streamID = m_buf[3];
++        size_t pesPacketLength = (m_buf[4] << 8) | m_buf[5];
++        // audio stream
++        if ((streamID & 0xe0) == 0xc0 && m_buf.size() >= 6 + pesPacketLength && pesPacketLength >= 3) {
++            // PES has been accumulated
++            size_t pesPayloadPos = 9 + m_buf[8];
++            if (pesPayloadPos < 6 + pesPacketLength) {
++                m_buf.resize(6 + pesPacketLength);
++                if (Aac::TransmuxDualMono(m_destLeftBuf, m_destRightBuf, m_audio1MuxDualMonoWorkspace,
++                                          m_audio1MuxToStereo, m_audio2MuxToStereo,
++                                          m_buf.data() + pesPayloadPos, m_buf.size() - pesPayloadPos) &&
++                    !m_destLeftBuf.empty() &&
++                    !m_destRightBuf.empty()) {
++
++                    // Dual mono left
++                    m_buf.resize(pesPayloadPos);
++                    m_buf.insert(m_buf.end(), m_destLeftBuf.begin(), m_destLeftBuf.end());
++
++                    // Set stream ID
++                    m_buf[3] = 0xc0;
++                    // Set length fields
++                    size_t pesLen = m_buf.size() - 6;
++                    m_buf[4] = static_cast<uint8_t>(pesLen >> 8);
++                    m_buf[5] = static_cast<uint8_t>(pesLen);
++                    AddAudioPesPackets(m_buf, 0x0112, m_audio1PesCounter, m_audio1PtsPcrDiff, pcrFlag ? pcr : nullptr);
++
++                    if (m_audio2Pid == 0 && m_audio2Mode != 2) {
++                        // Dual mono right
++                        m_buf.resize(pesPayloadPos);
++                        m_buf.insert(m_buf.end(), m_destRightBuf.begin(), m_destRightBuf.end());
++
++                        // Set stream ID
++                        m_buf[3] = 0xc1;
++                        // Set length fields
++                        pesLen = m_buf.size() - 6;
++                        m_buf[4] = static_cast<uint8_t>(pesLen >> 8);
++                        m_buf[5] = static_cast<uint8_t>(pesLen);
++                        AddAudioPesPackets(m_buf, 0x0113, m_audio2PesCounter, m_audio2PtsPcrDiff, nullptr);
++                    }
++                    return true;
++                }
++            }
++        }
++    }
++    return false;
++}
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.hpp b/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.hpp
+new file mode 100644
+index 0000000000..55b2570945
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/servicefilter.hpp
+@@ -0,0 +1,97 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#ifndef INCLUDE_SERVICEFILTER_HPP
++#define INCLUDE_SERVICEFILTER_HPP
++
++#include "util.hpp"
++#include <stdint.h>
++#include <vector>
++
++class CServiceFilter
++{
++public:
++    CServiceFilter();
++    void SetProgramNumberOrIndex(int n) { m_programNumberOrIndex = n; }
++    void SetAudio1Mode(int mode);
++    void SetAudio2Mode(int mode);
++    void SetCaptionMode(int mode);
++    void SetSuperimposeMode(int mode);
++    void AddPacket(const uint8_t *packet);
++    const std::vector<uint8_t> &GetPackets() const { return m_packets; }
++    void ClearPackets() { m_packets.clear(); }
++
++private:
++    const uint8_t H_262_VIDEO = 0x02;
++    const uint8_t MPEG2_AUDIO = 0x04;
++    const uint8_t PES_PRIVATE_DATA = 0x06;
++    const uint8_t ADTS_TRANSPORT = 0x0f;
++    const uint8_t AVC_VIDEO = 0x1b;
++    const uint8_t H_265_VIDEO = 0x24;
++
++    static std::vector<PMT_REF>::const_iterator FindNitRef(const std::vector<PMT_REF> &pmt);
++    std::vector<PMT_REF>::const_iterator FindTargetPmtRef(const std::vector<PMT_REF> &pmt) const;
++    void AddPat(int transportStreamID, int programNumber, bool addNit);
++    void AddPmt(const PSI &psi);
++    void AddPcrAdaptation(const uint8_t *pcr);
++    void ChangePidAndAddPacket(const uint8_t *packet, int pid, uint8_t counter = 0xff);
++    void AddAudioPesPackets(uint8_t index, int64_t targetPts, int64_t &pts, uint8_t &counter);
++    void Add64MsecAudioPesPacket(uint8_t index, int64_t pts, uint8_t &counter);
++    static int64_t GetAudioPresentationTimeStamp(int unitStart, const uint8_t *payload, int payloadSize);
++    static bool AccumulatePesPackets(std::vector<uint8_t> &unitPackets, const uint8_t *packet, int unitStart);
++    static void ConcatenatePayload(std::vector<uint8_t> &dest, const std::vector<uint8_t> &unitPackets, bool &pcrFlag, uint8_t (&pcr)[6]);
++    void AddCaptionManagementPesPacket(int64_t pts, uint8_t counter);
++    void AddSuperimposeManagementPesPacket(uint8_t counter);
++    void AddAudioPesPackets(const std::vector<uint8_t> &pes, int pid, uint8_t &counter, int64_t &ptsPcrDiff, const uint8_t *pcr);
++    bool TransmuxMonoToStereo(const std::vector<uint8_t> &unitPackets, std::vector<uint8_t> &workspace,
++                              int pid, uint8_t &counter, int64_t &ptsPcrDiff);
++    bool TransmuxDualMono(const std::vector<uint8_t> &unitPackets);
++
++    int m_programNumberOrIndex;
++    int m_audio1Mode;
++    int m_audio2Mode;
++    bool m_audio1MuxToStereo;
++    bool m_audio2MuxToStereo;
++    bool m_audio1MuxDualMono;
++    int m_captionMode;
++    int m_superimposeMode;
++    bool m_captionInsertManagementPacket;
++    bool m_superimposeInsertManagementPacket;
++    std::vector<uint8_t> m_packets;
++    PAT m_pat;
++    PSI m_pmtPsi;
++    int m_videoPid;
++    int m_audio1Pid;
++    int m_audio2Pid;
++    uint8_t m_audio1StreamType;
++    uint8_t m_audio2StreamType;
++    int m_captionPid;
++    int m_superimposePid;
++    int m_pcrPid;
++    int64_t m_pcr;
++    uint8_t m_patCounter;
++    uint8_t m_pmtCounter;
++    uint8_t m_audio1PesCounter;
++    uint8_t m_audio2PesCounter;
++    uint8_t m_captionPesCounter;
++    uint8_t m_superimposePesCounter;
++    bool m_isAudio1DualMono;
++    std::vector<uint8_t> m_audio1UnitPackets;
++    std::vector<uint8_t> m_audio2UnitPackets;
++    std::vector<uint8_t> m_audio1MuxWorkspace;
++    std::vector<uint8_t> m_audio2MuxWorkspace;
++    std::vector<uint8_t> m_audio1MuxDualMonoWorkspace;
++    int64_t m_audio1Pts;
++    int64_t m_audio2Pts;
++    int64_t m_audio1PtsPcrDiff;
++    int64_t m_audio2PtsPcrDiff;
++    int64_t m_captionManagementPcr;
++    int64_t m_superimposeManagementPcr;
++    std::vector<uint8_t> m_buf;
++    std::vector<uint8_t> m_destLeftBuf;
++    std::vector<uint8_t> m_destRightBuf;
++    std::vector<uint8_t> m_lastPat;
++    std::vector<uint8_t> m_lastPmt;
++};
++
++#endif
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/util.cpp b/modules/stream_filter/arib_dualmono/tsreadex/util.cpp
+new file mode 100644
+index 0000000000..44eb687263
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/util.cpp
+@@ -0,0 +1,160 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#include "util.hpp"
++#include <algorithm>
++
++uint16_t calc_crc16_ccitt(const uint8_t *data, int data_size, uint16_t crc)
++{
++    for (int i = 0; i < data_size; ++i) {
++        uint16_t c = ((crc >> 8) ^ data[i]) << 8;
++        for (int j = 0; j < 8; ++j) {
++            c = (c << 1) ^ (c & 0x8000 ? 0x1021 : 0);
++        }
++        crc = (crc << 8) ^ c;
++    }
++    return crc;
++}
++
++uint32_t calc_crc32(const uint8_t *data, int data_size, uint32_t crc)
++{
++    for (int i = 0; i < data_size; ++i) {
++        uint32_t c = ((crc >> 24) ^ data[i]) << 24;
++        for (int j = 0; j < 8; ++j) {
++            c = (c << 1) ^ (c & 0x80000000 ? 0x04c11db7 : 0);
++        }
++        crc = (crc << 8) ^ c;
++    }
++    return crc;
++}
++
++int extract_psi(PSI *psi, const uint8_t *payload, int payload_size, int unit_start, int counter)
++{
++    int copy_pos = 0;
++    int copy_size = payload_size;
++    int done = 1;
++    if (unit_start) {
++        if (payload_size < 1) {
++            psi->continuity_counter = psi->data_count = psi->version_number = 0;
++            return 1;
++        }
++        int pointer = payload[0];
++        psi->continuity_counter = (psi->continuity_counter + 1) & 0x2f;
++        if (pointer > 0 && psi->continuity_counter == (0x20 | counter)) {
++            copy_pos = 1;
++            copy_size = pointer;
++            // Call the function again
++            done = 0;
++        }
++        else {
++            psi->continuity_counter = 0x20 | counter;
++            psi->data_count = psi->version_number = 0;
++            copy_pos = 1 + pointer;
++            copy_size -= copy_pos;
++        }
++    }
++    else {
++        psi->continuity_counter = (psi->continuity_counter + 1) & 0x2f;
++        if (psi->continuity_counter != (0x20 | counter)) {
++            psi->continuity_counter = psi->data_count = psi->version_number = 0;
++            return 1;
++        }
++    }
++    if (copy_size > 0 && copy_pos + copy_size <= payload_size) {
++        copy_size = std::min(copy_size, static_cast<int>(sizeof(psi->data)) - psi->data_count);
++        std::copy(payload + copy_pos, payload + copy_pos + copy_size, psi->data + psi->data_count);
++        psi->data_count += copy_size;
++    }
++
++    // If psi->version_number != 0, these fields are valid.
++    if (psi->data_count >= 3) {
++        int section_length = ((psi->data[1] & 0x03) << 8) | psi->data[2];
++        if (psi->data_count >= 3 + section_length &&
++            calc_crc32(psi->data, 3 + section_length) == 0 &&
++            section_length >= 3)
++        {
++            psi->table_id = psi->data[0];
++            psi->section_length = section_length;
++            psi->version_number = 0x20 | ((psi->data[5] >> 1) & 0x1f);
++            psi->current_next_indicator = psi->data[5] & 0x01;
++        }
++    }
++    return done;
++}
++
++void extract_pat(PAT *pat, const uint8_t *payload, int payload_size, int unit_start, int counter)
++{
++    int done;
++    do {
++        done = extract_psi(&pat->psi, payload, payload_size, unit_start, counter);
++        if (pat->psi.version_number &&
++            pat->psi.current_next_indicator &&
++            pat->psi.table_id == 0 &&
++            pat->psi.section_length >= 5)
++        {
++            // Update PAT
++            const uint8_t *table = pat->psi.data;
++            pat->transport_stream_id = (table[3] << 8) | table[4];
++            pat->version_number = pat->psi.version_number;
++
++            // Update PMT list
++            pat->pmt.clear();
++            int pos = 3 + 5;
++            while (pos + 3 < 3 + pat->psi.section_length - 4/*CRC32*/) {
++                // Including NIT (program_number == 0)
++                pat->pmt.resize(pat->pmt.size() + 1);
++                pat->pmt.back().pmt_pid = ((table[pos + 2] & 0x1f) << 8) | table[pos + 3];
++                pat->pmt.back().program_number = (table[pos] << 8) | (table[pos + 1]);
++                pos += 4;
++            }
++        }
++    }
++    while (!done);
++}
++
++int get_ts_payload_size(const uint8_t *packet)
++{
++    int adaptation = extract_ts_header_adaptation(packet);
++    if (adaptation & 1) {
++        if (adaptation == 3) {
++            int adaptation_length = packet[4];
++            if (adaptation_length <= 183) {
++                return 183 - adaptation_length;
++            }
++        }
++        else {
++            return 184;
++        }
++    }
++    return 0;
++}
++
++int resync_ts(const uint8_t *data, int data_size, int *unit_size)
++{
++    if (*unit_size == 188 || *unit_size == 192 || *unit_size == 204) {
++        for (int offset = 0; offset < data_size && offset < *unit_size; ++offset) {
++            int i = offset;
++            for (; i < data_size; i += *unit_size) {
++                if (data[i] != 0x47) {
++                    break;
++                }
++            }
++            if (i >= data_size) {
++                return offset;
++            }
++        }
++    }
++    else {
++        // Unknown unit size
++        for (int i = 0; i < 3; ++i) {
++            *unit_size = i == 0 ? 188 : i == 1 ? 192 : 204;
++            int offset = resync_ts(data, data_size, unit_size);
++            if (offset < data_size) {
++                return offset;
++            }
++        }
++        *unit_size = 0;
++    }
++    // Failed
++    return data_size;
++}
+diff --git a/modules/stream_filter/arib_dualmono/tsreadex/util.hpp b/modules/stream_filter/arib_dualmono/tsreadex/util.hpp
+new file mode 100644
+index 0000000000..6009f4fc09
+--- /dev/null
++++ b/modules/stream_filter/arib_dualmono/tsreadex/util.hpp
+@@ -0,0 +1,67 @@
++// SPDX-FileCopyrightText: 2021 xtne6f
++// SPDX-License-Identifier: MIT
++
++#ifndef INCLUDE_UTIL_HPP
++#define INCLUDE_UTIL_HPP
++
++#include <stddef.h>
++#include <stdint.h>
++#include <vector>
++
++struct PSI
++{
++    int table_id;
++    int section_length;
++    int version_number;
++    int current_next_indicator;
++    int continuity_counter;
++    int data_count;
++    uint8_t data[1024];
++};
++
++struct PMT_REF
++{
++    int pmt_pid;
++    int program_number;
++};
++
++struct PAT
++{
++    int transport_stream_id;
++    int version_number;
++    std::vector<PMT_REF> pmt;
++    PSI psi;
++};
++
++uint16_t calc_crc16_ccitt(const uint8_t *data, int data_size, uint16_t crc = 0);
++uint32_t calc_crc32(const uint8_t *data, int data_size, uint32_t crc = 0xffffffff);
++int extract_psi(PSI *psi, const uint8_t *payload, int payload_size, int unit_start, int counter);
++void extract_pat(PAT *pat, const uint8_t *payload, int payload_size, int unit_start, int counter);
++int get_ts_payload_size(const uint8_t *packet);
++int resync_ts(const uint8_t *data, int data_size, int *unit_size);
++
++inline int extract_ts_header_unit_start(const uint8_t *packet) { return !!(packet[1] & 0x40); }
++inline int extract_ts_header_pid(const uint8_t *packet) { return ((packet[1] & 0x1f) << 8) | packet[2]; }
++inline int extract_ts_header_adaptation(const uint8_t *packet) { return (packet[3] >> 4) & 0x03; }
++inline int extract_ts_header_counter(const uint8_t *packet) { return packet[3] & 0x0f; }
++
++inline uint8_t extract_bit(const uint8_t *data, size_t pos)
++{
++    return (data[pos >> 3] >> (7 - (pos & 7))) & 1;
++}
++
++inline bool read_bool(const uint8_t *data, size_t &pos)
++{
++    return !!extract_bit(data, pos++);
++}
++
++inline int read_bits(const uint8_t *data, size_t &pos, int n)
++{
++    int r = 0;
++    while (--n >= 0) {
++        r |= extract_bit(data, pos++) << n;
++    }
++    return r;
++}
++
++#endif
+diff --git a/modules/stream_filter/meson.build b/modules/stream_filter/meson.build
+index 9f9ae2cd80..e3f26bcb19 100644
+--- a/modules/stream_filter/meson.build
++++ b/modules/stream_filter/meson.build
+@@ -52,3 +52,15 @@ vlc_modules += {
+     'dependencies' : [aribb25_dep],
+     'enabled': aribb25_dep.found(),
+ }
++
++vlc_modules += {
++    'name' : 'arib_dualmono',
++    'sources' : files(
++        'arib_dualmono/arib_dualmono.cpp',
++        'arib_dualmono/tsreadex/servicefilter.cpp',
++        'arib_dualmono/tsreadex/aac.cpp',
++        'arib_dualmono/tsreadex/huffman.cpp',
++        'arib_dualmono/tsreadex/util.cpp'
++    ),
++    'cpp_args' : ['-std=c++14']
++}
+--
+2.39.1
+
