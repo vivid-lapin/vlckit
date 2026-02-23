@@ -1,7 +1,7 @@
-From 574248e97091f0bf32c70f83f21a8266ee5fafa8 Mon Sep 17 00:00:00 2001
+From fd3f5b65c3da30d9022dfde27b40c47d8a3183aa Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 15 Feb 2026 23:28:34 +0900
-Subject: [PATCH 9008/9018] libaribcaption: fix access violetion
+Subject: [PATCH] libaribcaption: fix EXC_BAD_ACCESS in CopyImageToRegion
 
 ---
  modules/codec/arib/libaribcaption.c | 3 +++

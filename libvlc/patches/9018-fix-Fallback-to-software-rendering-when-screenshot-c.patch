@@ -1,8 +1,8 @@
-From abecf408b50bc93df4cd1a04f64484ab9539f77b Mon Sep 17 00:00:00 2001
+From f900189f8ccd9e07a00ed10b8e16433e1b6d3c7d Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Wed, 18 Feb 2026 00:55:23 +0900
-Subject: [PATCH 9011/9014] fix: Fallback to software rendering when screenshot
- capture fails
+Subject: [PATCH] fix: Fallback to software rendering when screenshot capture
+ fails
 
 ---
  src/video_output/video_output.c | 58 +++++++++++++++++++++++++++++++--

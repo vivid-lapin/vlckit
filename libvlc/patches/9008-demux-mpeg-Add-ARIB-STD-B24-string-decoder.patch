@@ -1,7 +1,7 @@
-From 9e5d3aca812f326bc2d3bbf1508a8f863e07f6c0 Mon Sep 17 00:00:00 2001
+From faafd79b60819815deee24ed74010683b9e9f94e Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 14 Feb 2026 22:14:21 +0900
-Subject: [PATCH 9007/9018] demux/mpeg: Add ARIB-STD-B24 string decoder
+Subject: [PATCH 1/2] demux/mpeg: Add ARIB-STD-B24 string decoder
 
 ---
  modules/demux/mpeg/arib_tables.h | 840 +++++++++++++++++++++++++++++++
@@ -1320,12 +1320,12 @@ index 26502496a7..0a859adbec 100644
 @@ -51,4 +51,6 @@ void ts_arib_logo_dr_Delete( ts_arib_logo_dr_t * );
  bool ts_arib_inject_png_palette( const uint8_t *p_in, size_t i_in,
                                   uint8_t **pp_out, size_t *pi_out );
- 
+
 +char * ts_arib_Decode( const uint8_t *p_in, size_t i_in );
 +
  #endif
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index 6a23825d59..e2ab37d13a 100644
+index 1c9d365089..4f31fc7fe1 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
 @@ -118,7 +118,10 @@ static char *EITConvertToUTF8( demux_t *p_demux,
@@ -1340,6 +1340,6 @@ index 6a23825d59..e2ab37d13a 100644
  #endif
      /* Deal with no longer broken providers (no switch byte
        but sending ISO_8859-1 instead of ISO_6937) without
--- 
+--
 2.39.1
 

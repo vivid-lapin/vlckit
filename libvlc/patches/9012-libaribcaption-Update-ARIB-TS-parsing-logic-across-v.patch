@@ -1,8 +1,8 @@
-From a3e0e80bbb190048a1a68cfe8c91fe1de6791963 Mon Sep 17 00:00:00 2001
+From 81d72bc92f25412eb57dc419a2c0fe87df0a41c6 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 16 Feb 2026 22:31:10 +0900
-Subject: [PATCH 9009/9018] libaribcaption: Fix access violation caused by
- renderer contention
+Subject: [PATCH] libaribcaption: Update ARIB TS parsing logic across various
+ descriptors and tables, including improvements to VLC ARIB captioning.
 
 ---
  modules/codec/arib/libaribcaption.c | 16 ++++++++++++++++
@@ -17,13 +17,13 @@ index d6bf01c2c4..bd3636d29d 100644
      aribcc_decoder_t  *p_decoder;
      aribcc_renderer_t *p_renderer;
 +    vlc_mutex_t        aribcc_lock; // protect p_decoder/p_renderer (libaribcaption is not thread-safe)
- 
+
      vlc_mutex_t        dec_lock;    // protect p_dec pointer
      decoder_t*         p_dec;       // pointer to decoder_t for logcat callback, NULL if decoder closed
 @@ -76,12 +77,14 @@ static void DecSysRelease(decoder_sys_t *p_sys)
      if (!vlc_atomic_rc_dec(&p_sys->rc))
          return;
- 
+
 +    vlc_mutex_lock(&p_sys->aribcc_lock);
      if (p_sys->p_renderer)
          aribcc_renderer_free(p_sys->p_renderer);
@@ -32,7 +32,7 @@ index d6bf01c2c4..bd3636d29d 100644
      if (p_sys->p_context)
          aribcc_context_free(p_sys->p_context);
 +    vlc_mutex_unlock(&p_sys->aribcc_lock);
- 
+
      free(p_sys);
  }
 @@ -126,15 +129,19 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
@@ -44,9 +44,9 @@ index d6bf01c2c4..bd3636d29d 100644
                                                            i_render_area_height);
 +        vlc_mutex_unlock(&p_sys->aribcc_lock);
      }
- 
+
      const vlc_tick_t i_stream_date = p_spusys->i_pts + (cfg->pts - p_subpic->i_start);
- 
+
      /* Retrieve the expected render status for detecting whether the subtitle image changed */
 +    vlc_mutex_lock(&p_sys->aribcc_lock);
      aribcc_render_status_t status = aribcc_renderer_try_render(p_sys->p_renderer,
@@ -58,7 +58,7 @@ index d6bf01c2c4..bd3636d29d 100644
 @@ -142,9 +149,11 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
          }
      }
- 
+
 +    vlc_mutex_lock(&p_sys->aribcc_lock);
      status = aribcc_renderer_render(p_sys->p_renderer,
                                      MS_FROM_VLC_TICK(i_stream_date),
@@ -69,7 +69,7 @@ index d6bf01c2c4..bd3636d29d 100644
      }
 @@ -221,11 +230,13 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
      }
- 
+
      aribcc_caption_t caption;
 +    vlc_mutex_lock(&p_sys->aribcc_lock);
      aribcc_decode_status_t status = aribcc_decoder_decode(p_sys->p_decoder,
@@ -84,13 +84,13 @@ index d6bf01c2c4..bd3636d29d 100644
 @@ -235,7 +246,9 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
          return VLCDEC_SUCCESS;
      }
- 
+
 +    vlc_mutex_lock(&p_sys->aribcc_lock);
      aribcc_renderer_append_caption(p_sys->p_renderer, &caption);
 +    vlc_mutex_unlock(&p_sys->aribcc_lock);
      aribcc_caption_cleanup(&caption);
- 
- 
+
+
 @@ -292,8 +305,10 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
  static void Flush(decoder_t *p_dec)
  {
@@ -100,16 +100,16 @@ index d6bf01c2c4..bd3636d29d 100644
      aribcc_renderer_flush(p_sys->p_renderer);
 +    vlc_mutex_unlock(&p_sys->aribcc_lock);
  }
- 
+
  /*****************************************************************************
 @@ -345,6 +360,7 @@ static int Open(vlc_object_t *p_this)
- 
+
      p_sys->b_cfg_fadeout = var_InheritBool(p_this, ARIBCAPTION_CFG_PREFIX "fadeout");
- 
+
 +    vlc_mutex_init(&p_sys->aribcc_lock);
      vlc_mutex_init(&p_sys->dec_lock);
      p_sys->p_dec = p_dec;
- 
--- 
+
+--
 2.39.1
 
