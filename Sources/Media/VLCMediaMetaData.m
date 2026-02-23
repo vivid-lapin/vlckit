@@ -379,7 +379,11 @@
 
 - (void)handleMediaMetaChanged:(const libvlc_meta_t)type
 {
-    [self fetchMetaDataForKey: type];
+    /* Meta change events from VLC core always arrive with meta_type=0 (Title),
+       so we must clear the entire cache and re-fetch all keys to pick up
+       changes in NowPlaying, Description, Publisher, etc. */
+    [self clearCache];
+    [self prefetch];
 }
 
 /* fetch and cache */
