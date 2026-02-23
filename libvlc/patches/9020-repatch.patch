@@ -1,0 +1,103 @@
+From 4129fe5376aa0daa45950cf3ce1ca267cc27f2cb Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Thu, 19 Feb 2026 00:39:19 +0900
+Subject: [PATCH] repatch
+
+---
+ modules/demux/mpeg/ts_si.c |  2 +-
+ src/input/es_out.c         | 45 ++++++++------------------------------
+ 2 files changed, 10 insertions(+), 37 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
+index fcdfcbe539..bc0b31ee3d 100644
+--- a/modules/demux/mpeg/ts_si.c
++++ b/modules/demux/mpeg/ts_si.c
+@@ -283,7 +283,7 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
+                 }
+                 if (p_sys->standard == TS_STANDARD_ARIB)
+                 {
+-                    vlc_meta_SetPublisher( p_meta, str2 ? str2 : str1 );
++                    vlc_meta_SetExtra( p_meta, "ServiceName", str2 ? str2 : str1 );
+                 }
+                 free( str1 );
+                 free( str2 );
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index 1d13dab2fd..06de365389 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -2055,13 +2055,6 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+ 
+     free( epg.psz_name );
+ 
+-    /* Update now playing */
+-    if( p_epg->b_present && p_pgrm->p_meta &&
+-       ( p_epg->p_current || p_epg->i_event == 0 ) )
+-    {
+-        vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, NULL );
+-    }
+-
+     const vlc_epg_event_t *p_current = NULL;
+     vlc_mutex_lock( &p_item->lock );
+     if( p_item->p_epg_table != NULL &&
+@@ -2094,8 +2087,8 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+         char psz_program_start[32];
+         char psz_program_duration[32];
+ 
+-        vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
+-        vlc_meta_Set( p_pgrm->p_meta, vlc_meta_Description, psz_short_desc );
++        vlc_meta_SetExtra( p_pgrm->p_meta, "PresentEventName", psz_name );
++        vlc_meta_SetExtra( p_pgrm->p_meta, "PresentEventShortDescriptor", psz_short_desc );
+         if( p_current != NULL )
+         {
+             snprintf( psz_program_start, sizeof(psz_program_start),
+@@ -2134,21 +2127,13 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+     /* Update selected program input info */
+     if( p_pgrm == p_sys->p_pgrm )
+     {
+-        const char *psz_nowplaying = p_pgrm->p_meta ?
+-                                     vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying ) : NULL;
+-
+-        input_item_SetESNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
+-        input_item_SetNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
+-
+-        const char *psz_desc = p_pgrm->p_meta ?
+-                               vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Description ) : NULL;
+-        input_item_SetDescription( input_priv(p_input)->p_item, psz_desc );
+-        input_item_SetDate( input_priv(p_input)->p_item, NULL );
+-
+-        /* Also propagate Publisher (service name from SDT) if available */
+-        const char *psz_pub = p_pgrm->p_meta ?
+-                              vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Publisher ) : NULL;
+-        input_item_SetPublisher( input_priv(p_input)->p_item, psz_pub );
++        const char *psz_service_name = p_pgrm->p_meta ?
++                                       vlc_meta_GetExtra( p_pgrm->p_meta, "ServiceName" ) : NULL;
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "ServiceName", psz_service_name );
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "PresentEventName",
++                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "PresentEventName" ) : NULL );
++        input_item_SetMetaExtra( input_priv(p_input)->p_item, "PresentEventShortDescriptor",
++                                 p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "PresentEventShortDescriptor" ) : NULL );
+         input_item_SetMetaExtra( input_priv(p_input)->p_item, "ProgramStartAt",
+                                  p_pgrm->p_meta ? vlc_meta_GetExtra( p_pgrm->p_meta, "ProgramStartAt" ) : NULL );
+         input_item_SetMetaExtra( input_priv(p_input)->p_item, "ProgramDuration",
+@@ -2173,18 +2158,6 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+             }
+         }
+         input_SendEventMeta( p_input );
+-
+-        const char *now_playing_tr =
+-            vlc_meta_TypeToLocalizedString(vlc_meta_ESNowPlaying);
+-        int ret;
+-        if( psz_nowplaying )
+-            ret = input_item_AddInfo( p_item, psz_cat, now_playing_tr,
+-                                      "%s", psz_nowplaying );
+-        else
+-            ret = input_item_DelInfo( p_item, psz_cat, now_playing_tr );
+-
+-        if( ret == VLC_SUCCESS )
+-            input_SendEventMetaInfo( p_input );
+     }
+ 
+     free( psz_cat );
+-- 
+2.39.1
+

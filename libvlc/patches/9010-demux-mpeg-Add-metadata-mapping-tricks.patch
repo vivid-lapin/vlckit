@@ -1,0 +1,93 @@
+From 9c76cb1f623438a42cd6f05712f71df59c6ceaa3 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 16 Feb 2026 21:34:22 +0900
+Subject: [PATCH 2/2] demux/mpeg: Add metadata mapping tricks
+
+---
+ modules/demux/mpeg/ts_si.c | 16 +++++++++++++++-
+ src/input/es_out.c         | 14 ++++++++++++++
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
+index e2ab37d13a..cd7d985025 100644
+--- a/modules/demux/mpeg/ts_si.c
++++ b/modules/demux/mpeg/ts_si.c
+@@ -281,6 +281,10 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
+                     if( pD->i_service_type >= 0x01 && pD->i_service_type <= 0x10 )
+                         psz_type = ppsz_type[pD->i_service_type];
+                 }
++                if (p_sys->standard == TS_STANDARD_ARIB)
++                {
++                    vlc_meta_SetPublisher( p_meta, str2 ? str2 : str1 );
++                }
+                 free( str1 );
+                 free( str2 );
+             }
+@@ -687,8 +691,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+     if( i_runevt || i_fallbackevt )
+         vlc_epg_SetCurrent( p_epg, (i_runevt) ? i_runevt : i_fallbackevt );
+
++    /* For EIT p/f (table_id 0x4E), if no current event was determined
++       (e.g. ARIB where running_status is always 0 and TDT may not have
++       arrived yet), use the first event as the present event per spec */
++    if( !i_runevt && !i_fallbackevt && p_eit->i_table_id == 0x4e &&
++        p_epg->i_event > 0 )
++    {
++        vlc_epg_SetCurrent( p_epg, p_epg->pp_event[0]->i_start );
++    }
++
+     if( p_epg->i_event > 0 )
+     {
++        p_epg->b_present = (p_eit->i_table_id == 0x4e);
+         if( p_epg->b_present && p_epg->p_current )
+         {
+             ts_pat_t *p_pat = ts_pid_Get(&p_sys->pids, 0)->u.p_pat;
+@@ -698,8 +712,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+                 p_pmt->eit.i_event_start = p_epg->p_current->i_start;
+                 p_pmt->eit.i_event_length = p_epg->p_current->i_duration;
+             }
++
+         }
+-        p_epg->b_present = (p_eit->i_table_id == 0x4e);
+         es_out_Control( p_demux->out, ES_OUT_SET_GROUP_EPG, p_eit->i_extension, p_epg );
+     }
+     vlc_epg_Delete( p_epg );
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index d341adac71..be15fd2ca4 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -2023,10 +2023,14 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+         if( p_tmp->b_present && p_tmp->i_source_id == p_pgrm->i_id )
+         {
+             const char *psz_name = ( p_tmp->p_current ) ? p_tmp->p_current->psz_name : NULL;
++            const char *psz_short_desc = ( p_tmp->p_current ) ? p_tmp->p_current->psz_short_description : NULL;
+             if( !p_pgrm->p_meta )
+                 p_pgrm->p_meta = vlc_meta_New();
+             if( p_pgrm->p_meta )
++            {
+                 vlc_meta_Set( p_pgrm->p_meta, vlc_meta_ESNowPlaying, psz_name );
++                vlc_meta_Set( p_pgrm->p_meta, vlc_meta_Description, psz_short_desc );
++            }
+             break;
+         }
+     }
+@@ -2039,6 +2043,16 @@ static void EsOutProgramEpg(es_out_sys_t *p_sys, input_source_t *source,
+                                      vlc_meta_Get( p_pgrm->p_meta, vlc_meta_ESNowPlaying ) : NULL;
+
+         input_item_SetESNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
++        input_item_SetNowPlaying( input_priv(p_input)->p_item, psz_nowplaying );
++
++        const char *psz_desc = p_pgrm->p_meta ?
++                               vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Description ) : NULL;
++        input_item_SetDescription( input_priv(p_input)->p_item, psz_desc );
++
++        /* Also propagate Publisher (service name from SDT) if available */
++        const char *psz_pub = p_pgrm->p_meta ?
++                              vlc_meta_Get( p_pgrm->p_meta, vlc_meta_Publisher ) : NULL;
++        input_item_SetPublisher( input_priv(p_input)->p_item, psz_pub );
+         input_SendEventMeta( p_input );
+
+         const char *now_playing_tr =
+--
+2.39.1
+

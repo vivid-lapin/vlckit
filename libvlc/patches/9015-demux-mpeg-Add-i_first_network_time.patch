@@ -1,0 +1,106 @@
+From 1d29891a197b6d84d5d74281ec9f57b7457081fa Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Tue, 17 Feb 2026 01:38:53 +0900
+Subject: [PATCH] demux/mpeg: Add i_first_network_time
+
+---
+ modules/demux/mpeg/ts.c    |  1 +
+ modules/demux/mpeg/ts.h    |  1 +
+ modules/demux/mpeg/ts_si.c | 28 ++++++++++++++++++++++++++++
+ src/input/es_out.c         |  3 ++-
+ 4 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 45e3323884..0cb356270a 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -383,6 +383,7 @@ static int Open( vlc_object_t *p_this )
+     p_sys->b_default_selection = false;
+     p_sys->i_network_time = 0;
+     p_sys->i_network_time_update = 0;
++    p_sys->i_first_network_time = 0;
+
+     p_sys->vdr = vdr;
+
+diff --git a/modules/demux/mpeg/ts.h b/modules/demux/mpeg/ts.h
+index 2f1bb8c6b3..997526ce53 100644
+--- a/modules/demux/mpeg/ts.h
++++ b/modules/demux/mpeg/ts.h
+@@ -110,6 +110,7 @@ struct demux_sys_t
+     /* */
+     time_t      i_network_time;
+     time_t      i_network_time_update; /* for network time interpolation */
++    time_t      i_first_network_time;
+     bool        b_broken_charset; /* True if broken encoding is used in EPG/SDT */
+
+     /* Selected programs */
+diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
+index 52a6c17f9c..5c0ce20b1f 100644
+--- a/modules/demux/mpeg/ts_si.c
++++ b/modules/demux/mpeg/ts_si.c
+@@ -395,6 +395,7 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+ {
+     demux_t            *p_demux = opaque;
+     demux_sys_t        *p_sys = p_demux->p_sys;
++    bool                b_first_time_meta = false;
+
+
+     p_sys->i_network_time = EITConvertStartTime( p_tdt->i_utc_time );
+@@ -408,6 +409,11 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+            falling back on fixed offset is safe */
+         p_sys->i_network_time -= 9 * 3600;
+     }
++    if( p_sys->i_first_network_time == 0 && p_sys->i_network_time > 0 )
++    {
++        p_sys->i_first_network_time = p_sys->i_network_time;
++        b_first_time_meta = true;
++    }
+
+     /* Because libdvbpsi is broken and deduplicating timestamp tables,
+      * we need to reset it to get next timestamp callback */
+@@ -416,6 +422,28 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+     dvbpsi_tot_delete(p_tdt);
+
+     es_out_Control( p_demux->out, ES_OUT_SET_EPG_TIME, (int64_t) p_sys->i_network_time );
++
++    if( b_first_time_meta )
++    {
++        struct tm tm;
++        char psz_utc[64];
++        char psz_first_network_time[32];
++
++        if( gmtime_r( &p_sys->i_first_network_time, &tm ) &&
++            strftime( psz_utc, sizeof(psz_utc), "%Y-%m-%dT%H:%M:%SZ", &tm ) > 0 &&
++            snprintf( psz_first_network_time, sizeof(psz_first_network_time),
++                      "%"PRId64, (int64_t)p_sys->i_first_network_time ) > 0 )
++        {
++            vlc_meta_t *p_meta = vlc_meta_New();
++            if( p_meta )
++            {
++                vlc_meta_SetExtra( p_meta, "firstNetworkTime", psz_first_network_time );
++                vlc_meta_SetExtra( p_meta, "firstNetworkTimeUTC", psz_utc );
++                es_out_Control( p_demux->out, ES_OUT_SET_GROUP_META, -1, p_meta );
++                vlc_meta_Delete( p_meta );
++            }
++        }
++    }
+ }
+
+ typedef struct
+diff --git a/src/input/es_out.c b/src/input/es_out.c
+index 849efa922b..df0b0c27bc 100644
+--- a/src/input/es_out.c
++++ b/src/input/es_out.c
+@@ -1848,7 +1848,8 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
+     /* Check against empty meta data (empty for what we handle) */
+     if( !vlc_meta_Get( p_meta, vlc_meta_Title) &&
+         !vlc_meta_Get( p_meta, vlc_meta_ESNowPlaying) &&
+-        !vlc_meta_Get( p_meta, vlc_meta_Publisher) )
++        !vlc_meta_Get( p_meta, vlc_meta_Publisher) &&
++        vlc_meta_GetExtraCount( p_meta ) == 0 )
+     {
+         return;
+     }
+--
+2.39.1
+
