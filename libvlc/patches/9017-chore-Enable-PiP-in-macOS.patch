@@ -1,12 +1,13 @@
-From 7bd085157b0f082fc5a4dbf88d66c8d7385e3ae9 Mon Sep 17 00:00:00 2001
+From 5db21bd6d6cedb4f13e3a2883ed0cd84f9cffbba Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am       |  9 ++++++++-
- modules/video_output/apple/meson.build | 14 ++++++++++++++
- 2 files changed, 22 insertions(+), 1 deletion(-)
+ modules/video_output/Makefile.am              |  9 ++++++++-
+ .../apple/VLCPictureInPictureController.m     | 19 +++++++++++++++++++
+ modules/video_output/apple/meson.build        | 14 ++++++++++++++
+ 3 files changed, 41 insertions(+), 1 deletion(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -15,7 +16,7 @@ index 62808377ed..ed6f4adb13 100644
 @@ -94,13 +94,20 @@ vout_LTLIBRARIES += libsamplebufferdisplay_plugin.la
  endif
  endif
- 
+
 -if HAVE_IOS_OR_TVOS
 +if HAVE_DARWIN
 +if !HAVE_WATCHOS
@@ -31,9 +32,46 @@ index 62808377ed..ed6f4adb13 100644
  vout_LTLIBRARIES += libpictureinpicturecontroller_plugin.la
  endif
 +endif
- 
+
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
+diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
+index 7526f50a3f..8af8cf2830 100644
+--- a/modules/video_output/apple/VLCPictureInPictureController.m
++++ b/modules/video_output/apple/VLCPictureInPictureController.m
+@@ -226,6 +226,15 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+ - (void)startPictureInPicture {
+     AVPictureInPictureController *avPipController =
+         (AVPictureInPictureController *)_avPipController;
++    if (!avPipController) {
++        msg_Err(_pipcontroller, "Cannot start PiP: controller is nil");
++        return;
++    }
++    if (@available(macOS 12.0, iOS 15.0, tvos 15.0, *)) {
++        if (!avPipController.isPictureInPicturePossible) {
++            msg_Err(_pipcontroller, "Cannot start PiP: isPictureInPicturePossible is false");
++        }
++    }
+     [avPipController startPictureInPicture];
+ }
+
+@@ -241,6 +250,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+     [avPipController invalidatePlaybackState];
+ }
+
++- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController
++ failedToStartPictureInPictureWithError:(NSError *)error {
++    msg_Err(_pipcontroller, "PiP failed to start: %s", error.localizedDescription.UTF8String);
++}
++
++- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController
++restoreUserInterfaceForPictureInPictureStopWithCompletionHandler:(void (^)(BOOL restored))completionHandler {
++    completionHandler(YES);
++}
++
+ @end
+
+ static void SetDisplayLayer( pip_controller_t *pipcontroller, void *layer) {
 diff --git a/modules/video_output/apple/meson.build b/modules/video_output/apple/meson.build
 index a2f04f1e22..7bedea58a1 100644
 --- a/modules/video_output/apple/meson.build
@@ -41,7 +79,7 @@ index a2f04f1e22..7bedea58a1 100644
 @@ -52,6 +52,20 @@ vlc_modules += {
      ],
  }
- 
+
 +vlc_modules += {
 +    'name' : 'pictureinpicturecontroller',
 +    'sources' : files('VLCPictureInPictureController.m'),
@@ -59,6 +97,6 @@ index a2f04f1e22..7bedea58a1 100644
  if have_ios or have_tvos
      vlc_modules += {
          'name' : 'caeagl',
--- 
+--
 2.39.1
 
