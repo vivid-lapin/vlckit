@@ -1,0 +1,183 @@
+From 448b1ec4a709c9c2789be9d07722e02895f6fac1 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 23 Feb 2026 22:08:03 +0900
+Subject: [PATCH] chore: subtitle in PiP
+
+---
+ .../apple/VLCPictureInPictureController.m     |  7 +++
+ .../apple/VLCSampleBufferDisplay.m            | 55 +++++++++++++++----
+ .../video_output/apple/vlc_pip_controller.h   |  2 +
+ 3 files changed, 52 insertions(+), 12 deletions(-)
+
+diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
+index ff3b7f9985..7526f50a3f 100644
+--- a/modules/video_output/apple/VLCPictureInPictureController.m
++++ b/modules/video_output/apple/VLCPictureInPictureController.m
+@@ -208,11 +208,15 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+ }
+ 
+ - (void)pictureInPictureControllerDidStartPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
++    if (_pipcontroller->state_changed_cb != NULL)
++        _pipcontroller->state_changed_cb(_pipcontroller->state_cb_opaque, true);
+     if (_stateChangeEventHandler)
+         _stateChangeEventHandler(YES);
+ }
+ 
+ - (void)pictureInPictureControllerDidStopPictureInPicture:(AVPictureInPictureController *)pictureInPictureController {
++    if (_pipcontroller->state_changed_cb != NULL)
++        _pipcontroller->state_changed_cb(_pipcontroller->state_cb_opaque, false);
+     if(_stateChangeEventHandler)
+         _stateChangeEventHandler(NO);
+ }
+@@ -295,6 +299,9 @@ static bool PipControllerMediaIsPlaying(void *opaque) {
+ 
+ static int CloseController( pip_controller_t *pipcontroller )
+ {
++    pipcontroller->state_changed_cb = NULL;
++    pipcontroller->state_cb_opaque = NULL;
++
+     if (@available(macOS 12.0, iOS 15.0, tvos 15.0, *)) {
+         VLCPictureInPictureController *sys = 
+             (__bridge_transfer VLCPictureInPictureController*)pipcontroller->p_sys;
+diff --git a/modules/video_output/apple/VLCSampleBufferDisplay.m b/modules/video_output/apple/VLCSampleBufferDisplay.m
+index f13a4f4f8a..82b58387ce 100644
+--- a/modules/video_output/apple/VLCSampleBufferDisplay.m
++++ b/modules/video_output/apple/VLCSampleBufferDisplay.m
+@@ -461,8 +461,15 @@ static void DeleteCVPXConverter( filter_t * p_converter )
+     vlc_object_delete(p_converter);
+ }
+ 
+-static pip_controller_t * CreatePipController( vout_display_t *vd, void *cbs_opaque );
++static pip_controller_t * CreatePipController( vout_display_t *vd, void *cbs_opaque,
++                                               void (*state_changed_cb)(void *, bool) );
+ static void DeletePipController( pip_controller_t * pipcontroller );
++static void PictureInPictureStateChanged(void *opaque, bool is_started);
++
++static const vlc_fourcc_t sample_buffer_display_subfmts[] = {
++    VLC_CODEC_ARGB,
++    0
++};
+ 
+ #pragma mark -
+ @class VLCSampleBufferSubpicture, VLCSampleBufferDisplay;
+@@ -652,12 +659,14 @@ shouldInheritContentsScale:(CGFloat)newScale
+     @property (nonatomic) VLCSampleBufferSubpictureView *spuView;
+     @property (nonatomic) VLCSampleBufferSubpicture *subpicture;
+     @property (nonatomic) id<VLCPixelBufferRotationContext> rotationContext;
++    @property (atomic) BOOL pictureInPictureStarted;
+ 
+     @property (nonatomic, readonly) pip_controller_t *pipcontroller;
+ 
+     - (instancetype)init NS_UNAVAILABLE;
+     + (instancetype)new NS_UNAVAILABLE;
+     - (instancetype)initWithVoutDisplay:(vout_display_t *)vd;
++    - (void)handlePictureInPictureStateChange:(BOOL)isStarted;
+ @end
+ 
+ @implementation VLCSampleBufferDisplay
+@@ -693,7 +702,8 @@ shouldInheritContentsScale:(CGFloat)newScale
+ 
+     _window = window;
+ 
+-    _pipcontroller = CreatePipController(vd, (__bridge void *)self);
++    _pipcontroller = CreatePipController(vd, (__bridge void *)self,
++                                         PictureInPictureStateChanged);
+ 
+     _vd = vd;
+ 
+@@ -756,6 +766,21 @@ shouldInheritContentsScale:(CGFloat)newScale
+     _pipcontroller = NULL;
+ }
+ 
++- (void)handlePictureInPictureStateChange:(BOOL)isStarted
++{
++    self.pictureInPictureStarted = isStarted;
++    if (isStarted)
++        self.vd->info.subpicture_chromas = NULL;
++    else
++        self.vd->info.subpicture_chromas = sample_buffer_display_subfmts;
++
++    /* Force the on-screen SPU view to clear stale regions immediately. */
++    dispatch_async(dispatch_get_main_queue(), ^{
++        [self.spuView drawSubpicture:nil];
++        self.spuView.hidden = isStarted;
++    });
++}
++
+ @end
+ 
+ #pragma mark -
+@@ -1011,11 +1036,13 @@ static bool IsSubpictureDrawNeeded(vout_display_t *vd, const vlc_render_subpictu
+ 
+ static void RenderSubpicture(vout_display_t *vd, const vlc_render_subpicture *spu)
+ {
+-    if (!IsSubpictureDrawNeeded(vd, spu))
+-        return;
+-
+     VLCSampleBufferDisplay *sys;
+     sys = (__bridge VLCSampleBufferDisplay*)vd->sys;
++    if (sys.pictureInPictureStarted)
++        return;
++
++    if (!IsSubpictureDrawNeeded(vd, spu))
++        return;
+ 
+     dispatch_async(dispatch_get_main_queue(), ^{
+         [sys.spuView drawSubpicture:sys.subpicture];
+@@ -1064,9 +1091,12 @@ static int Control (vout_display_t *vd, int query)
+     return VLC_SUCCESS;
+ }
+ 
+-static pip_controller_t * CreatePipController( vout_display_t *vd, void *cbs_opaque )
++static pip_controller_t * CreatePipController( vout_display_t *vd, void *cbs_opaque,
++                                               void (*state_changed_cb)(void *, bool) )
+ {
+     pip_controller_t *pip_controller = vlc_object_create(vd, sizeof(pip_controller_t));
++    pip_controller->state_cb_opaque = cbs_opaque;
++    pip_controller->state_changed_cb = state_changed_cb;
+ 
+     module_t **mods;
+     ssize_t total = vlc_module_match("pictureinpicture", NULL, false, &mods, NULL);
+@@ -1086,6 +1116,12 @@ static pip_controller_t * CreatePipController( vout_display_t *vd, void *cbs_opa
+     return NULL;
+ }
+ 
++static void PictureInPictureStateChanged(void *opaque, bool is_started)
++{
++    VLCSampleBufferDisplay *sys = (__bridge VLCSampleBufferDisplay *)opaque;
++    [sys handlePictureInPictureStateChange:is_started];
++}
++
+ static void DeletePipController( pip_controller_t * pip_controller )
+ {
+     if (pip_controller == NULL)
+@@ -1160,12 +1196,7 @@ static int Open (vout_display_t *vd,
+ 
+         vd->ops = &ops;
+ 
+-        static const vlc_fourcc_t subfmts[] = {
+-            VLC_CODEC_ARGB,
+-            0
+-        };
+-
+-        vd->info.subpicture_chromas = subfmts;
++        vd->info.subpicture_chromas = sample_buffer_display_subfmts;
+ 
+         return VLC_SUCCESS;
+     }
+diff --git a/modules/video_output/apple/vlc_pip_controller.h b/modules/video_output/apple/vlc_pip_controller.h
+index d92226c647..b67a70d4a6 100644
+--- a/modules/video_output/apple/vlc_pip_controller.h
++++ b/modules/video_output/apple/vlc_pip_controller.h
+@@ -51,6 +51,8 @@ struct pip_controller_t
+     struct vlc_object_t obj;
+ 
+     void               *p_sys;
++    void               *state_cb_opaque;
++    void               (*state_changed_cb)(void *opaque, bool is_started);
+ 
+     const struct pip_controller_operations *ops;
+     const struct pip_controller_media_callbacks *media_cbs;
+-- 
+2.39.1
+
