@@ -1,0 +1,64 @@
+From 7bd085157b0f082fc5a4dbf88d66c8d7385e3ae9 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Mon, 23 Feb 2026 23:54:25 +0900
+Subject: [PATCH] chore: Enable PiP in macOS
+
+---
+ modules/video_output/Makefile.am       |  9 ++++++++-
+ modules/video_output/apple/meson.build | 14 ++++++++++++++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
+index 62808377ed..ed6f4adb13 100644
+--- a/modules/video_output/Makefile.am
++++ b/modules/video_output/Makefile.am
+@@ -94,13 +94,20 @@ vout_LTLIBRARIES += libsamplebufferdisplay_plugin.la
+ endif
+ endif
+ 
+-if HAVE_IOS_OR_TVOS
++if HAVE_DARWIN
++if !HAVE_WATCHOS
+ libpictureinpicturecontroller_plugin_la_SOURCES = video_output/apple/VLCPictureInPictureController.m
+ libpictureinpicturecontroller_plugin_la_OBJCFLAGS = $(AM_OBJCFLAGS) -fobjc-arc
++if HAVE_OSX
++libpictureinpicturecontroller_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
++	-Wl,-framework,AVFoundation,-framework,Foundation,-framework,AVKit,-framework,Cocoa,-framework,QuartzCore,-framework,CoreMedia
++else
+ libpictureinpicturecontroller_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
+ 	-Wl,-framework,AVFoundation,-framework,Foundation,-framework,AVKit,-framework,UIKit,-framework,QuartzCore,-framework,CoreMedia
++endif
+ vout_LTLIBRARIES += libpictureinpicturecontroller_plugin.la
+ endif
++endif
+ 
+ libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
+ libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
+diff --git a/modules/video_output/apple/meson.build b/modules/video_output/apple/meson.build
+index a2f04f1e22..7bedea58a1 100644
+--- a/modules/video_output/apple/meson.build
++++ b/modules/video_output/apple/meson.build
+@@ -52,6 +52,20 @@ vlc_modules += {
+     ],
+ }
+ 
++vlc_modules += {
++    'name' : 'pictureinpicturecontroller',
++    'sources' : files('VLCPictureInPictureController.m'),
++    'objc_args' : ['-fobjc-arc'],
++    'dependencies' : [
++        frameworks['AVFoundation'],
++        frameworks['Foundation'],
++        frameworks['AVKit'],
++        uifwk_dep,
++        frameworks['QuartzCore'],
++        frameworks['CoreMedia'],
++    ],
++}
++
+ if have_ios or have_tvos
+     vlc_modules += {
+         'name' : 'caeagl',
+-- 
+2.39.1
+
