@@ -1,14 +1,14 @@
-From fc945919d298af87902aabcfc06390a425e58fc0 Mon Sep 17 00:00:00 2001
+From 9382835d3afe3ca30e78f469e1d3b9c0ec10531f Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am              |  9 +++-
- .../apple/VLCPictureInPictureController.m     | 51 +++++++++++++++++--
- .../apple/VLCSampleBufferDisplay.m            | 15 +++++-
- modules/video_output/apple/meson.build        | 14 +++++
- 4 files changed, 83 insertions(+), 6 deletions(-)
+ modules/video_output/Makefile.am              |  9 ++-
+ .../apple/VLCPictureInPictureController.m     | 73 ++++++++++++++++++-
+ .../apple/VLCSampleBufferDisplay.m            | 15 +++-
+ modules/video_output/apple/meson.build        | 14 ++++
+ 4 files changed, 105 insertions(+), 6 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -37,15 +37,36 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..5f7b7af28d 100644
+index 7526f50a3f..a0c72fc5d3 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
-@@ -55,6 +55,31 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -55,6 +55,53 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  @end
 
  @implementation VLCPictureInPictureController
 +{
 +    BOOL _startRequestedWhenNotPossible;
++}
++
++- (void)_logPipReadiness:(AVPictureInPictureController *)avPipController
++{
++    AVSampleBufferDisplayLayer *displayLayer = nil;
++    if (@available(macOS 12.0, iOS 15.0, tvos 15.0, *)) {
++        displayLayer = avPipController.contentSource.sampleBufferDisplayLayer;
++    }
++    if (!displayLayer) {
++        msg_Err(_pipcontroller, "PiP diagnostics: sample buffer display layer is nil");
++        return;
++    }
++    const char *errorStr = displayLayer.error ? displayLayer.error.localizedDescription.UTF8String : "none";
++    msg_Err(_pipcontroller,
++            "PiP diagnostics: possible=%d active=%d suspended=%d readyForDisplay=%d layerStatus=%ld layerError=%s",
++            avPipController.isPictureInPicturePossible,
++            avPipController.isPictureInPictureActive,
++            avPipController.isPictureInPictureSuspended,
++            displayLayer.readyForDisplay,
++            (long)displayLayer.status,
++            errorStr);
 +}
 +
 +- (void)_attemptStartPictureInPictureIfPossible
@@ -61,6 +82,7 @@ index 7526f50a3f..5f7b7af28d 100644
 +        if (!avPipController.isPictureInPicturePossible) {
 +            _startRequestedWhenNotPossible = YES;
 +            msg_Err(_pipcontroller, "Cannot start PiP now: isPictureInPicturePossible is false, deferring start");
++            [self _logPipReadiness:avPipController];
 +            return;
 +        }
 +    }
@@ -72,7 +94,7 @@ index 7526f50a3f..5f7b7af28d 100644
 
  - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
      self = [super init];
-@@ -105,6 +130,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -105,6 +152,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      }
  #endif
      _avPipController = avPipController;
@@ -80,7 +102,7 @@ index 7526f50a3f..5f7b7af28d 100644
 
 
      [_avPipController addObserver:self
-@@ -131,7 +157,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -131,7 +179,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
                         context:(void *)context {
      if (object==_avPipController) {
          if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
@@ -95,7 +117,7 @@ index 7526f50a3f..5f7b7af28d 100644
          }
      } else {
          [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-@@ -224,9 +256,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -224,9 +278,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  #pragma mark - VLCDisplayPictureInPictureControlling
 
  - (void)startPictureInPicture {
@@ -109,7 +131,7 @@ index 7526f50a3f..5f7b7af28d 100644
  }
 
  - (void)stopPictureInPicture {
-@@ -241,6 +274,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -241,6 +296,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
