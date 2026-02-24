@@ -1,14 +1,14 @@
-From 9382835d3afe3ca30e78f469e1d3b9c0ec10531f Mon Sep 17 00:00:00 2001
+From bf57cfa1d62a8744788870ca04d8703ecc344f13 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am              |  9 ++-
- .../apple/VLCPictureInPictureController.m     | 73 ++++++++++++++++++-
- .../apple/VLCSampleBufferDisplay.m            | 15 +++-
- modules/video_output/apple/meson.build        | 14 ++++
- 4 files changed, 105 insertions(+), 6 deletions(-)
+ modules/video_output/Makefile.am              |  9 +-
+ .../apple/VLCPictureInPictureController.m     | 93 ++++++++++++++++++-
+ .../apple/VLCSampleBufferDisplay.m            | 15 ++-
+ modules/video_output/apple/meson.build        | 14 +++
+ 4 files changed, 125 insertions(+), 6 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -37,10 +37,10 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..a0c72fc5d3 100644
+index 7526f50a3f..ec86449e4f 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
-@@ -55,6 +55,53 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -55,6 +55,73 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  @end
 
  @implementation VLCPictureInPictureController
@@ -58,15 +58,35 @@ index 7526f50a3f..a0c72fc5d3 100644
 +        msg_Err(_pipcontroller, "PiP diagnostics: sample buffer display layer is nil");
 +        return;
 +    }
++    BOOL hasReadyForDisplay = NO;
++    BOOL readyForDisplay = NO;
++    @try {
++        id readyValue = [displayLayer valueForKey:@"readyForDisplay"];
++        if (readyValue != nil) {
++            hasReadyForDisplay = YES;
++            readyForDisplay = [readyValue boolValue];
++        }
++    } @catch (__unused NSException *exception) {
++    }
++
 +    const char *errorStr = displayLayer.error ? displayLayer.error.localizedDescription.UTF8String : "none";
-+    msg_Err(_pipcontroller,
-+            "PiP diagnostics: possible=%d active=%d suspended=%d readyForDisplay=%d layerStatus=%ld layerError=%s",
-+            avPipController.isPictureInPicturePossible,
-+            avPipController.isPictureInPictureActive,
-+            avPipController.isPictureInPictureSuspended,
-+            displayLayer.readyForDisplay,
-+            (long)displayLayer.status,
-+            errorStr);
++    if (hasReadyForDisplay)
++        msg_Err(_pipcontroller,
++                "PiP diagnostics: possible=%d active=%d suspended=%d readyForDisplay=%d layerStatus=%ld layerError=%s",
++                avPipController.isPictureInPicturePossible,
++                avPipController.isPictureInPictureActive,
++                avPipController.isPictureInPictureSuspended,
++                readyForDisplay,
++                (long)displayLayer.status,
++                errorStr);
++    else
++        msg_Err(_pipcontroller,
++                "PiP diagnostics: possible=%d active=%d suspended=%d readyForDisplay=n/a layerStatus=%ld layerError=%s",
++                avPipController.isPictureInPicturePossible,
++                avPipController.isPictureInPictureActive,
++                avPipController.isPictureInPictureSuspended,
++                (long)displayLayer.status,
++                errorStr);
 +}
 +
 +- (void)_attemptStartPictureInPictureIfPossible
@@ -94,7 +114,7 @@ index 7526f50a3f..a0c72fc5d3 100644
 
  - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
      self = [super init];
-@@ -105,6 +152,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -105,6 +172,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      }
  #endif
      _avPipController = avPipController;
@@ -102,7 +122,7 @@ index 7526f50a3f..a0c72fc5d3 100644
 
 
      [_avPipController addObserver:self
-@@ -131,7 +179,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -131,7 +199,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
                         context:(void *)context {
      if (object==_avPipController) {
          if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
@@ -117,7 +137,7 @@ index 7526f50a3f..a0c72fc5d3 100644
          }
      } else {
          [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-@@ -224,9 +278,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -224,9 +298,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  #pragma mark - VLCDisplayPictureInPictureControlling
 
  - (void)startPictureInPicture {
@@ -131,7 +151,7 @@ index 7526f50a3f..a0c72fc5d3 100644
  }
 
  - (void)stopPictureInPicture {
-@@ -241,6 +296,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -241,6 +316,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
