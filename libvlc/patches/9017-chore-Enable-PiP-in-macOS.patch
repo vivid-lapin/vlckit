@@ -1,13 +1,14 @@
-From c4d33aa6d898062a7addd32d0bc3c1b96a7b4a01 Mon Sep 17 00:00:00 2001
+From fc945919d298af87902aabcfc06390a425e58fc0 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am              |  9 ++++-
- .../apple/VLCPictureInPictureController.m     | 35 ++++++++++++++++++-
- modules/video_output/apple/meson.build        | 14 ++++++++
- 3 files changed, 56 insertions(+), 2 deletions(-)
+ modules/video_output/Makefile.am              |  9 +++-
+ .../apple/VLCPictureInPictureController.m     | 51 +++++++++++++++++--
+ .../apple/VLCSampleBufferDisplay.m            | 15 +++++-
+ modules/video_output/apple/meson.build        | 14 +++++
+ 4 files changed, 83 insertions(+), 6 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -36,44 +37,26 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..e8ab779c75 100644
+index 7526f50a3f..5f7b7af28d 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
-@@ -55,6 +55,9 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -55,6 +55,31 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  @end
 
  @implementation VLCPictureInPictureController
 +{
 +    BOOL _startRequestedWhenNotPossible;
 +}
-
- - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
-     self = [super init];
-@@ -131,7 +134,15 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
-                        context:(void *)context {
-     if (object==_avPipController) {
-         if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
--            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", [change[NSKeyValueChangeNewKey] boolValue]);
-+            BOOL isPossible = [change[NSKeyValueChangeNewKey] boolValue];
-+            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", isPossible);
-+            if (isPossible && _startRequestedWhenNotPossible) {
-+                _startRequestedWhenNotPossible = NO;
-+                [self invalidatePlaybackState];
-+                AVPictureInPictureController *avPipController =
-+                    (AVPictureInPictureController *)_avPipController;
-+                [avPipController startPictureInPicture];
-+            }
-         }
-     } else {
-         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-@@ -226,6 +237,18 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
- - (void)startPictureInPicture {
-     AVPictureInPictureController *avPipController =
-         (AVPictureInPictureController *)_avPipController;
++
++- (void)_attemptStartPictureInPictureIfPossible
++{
++    AVPictureInPictureController *avPipController =
++        (AVPictureInPictureController *)_avPipController;
 +    if (!avPipController) {
 +        msg_Err(_pipcontroller, "Cannot start PiP: controller is nil");
 +        return;
 +    }
++
 +    if (@available(macOS 12.0, iOS 15.0, tvos 15.0, *)) {
 +        if (!avPipController.isPictureInPicturePossible) {
 +            _startRequestedWhenNotPossible = YES;
@@ -81,11 +64,52 @@ index 7526f50a3f..e8ab779c75 100644
 +            return;
 +        }
 +    }
++
++    _startRequestedWhenNotPossible = NO;
 +    [self invalidatePlaybackState];
-     [avPipController startPictureInPicture];
++    [avPipController startPictureInPicture];
++}
+
+ - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
+     self = [super init];
+@@ -105,6 +130,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+     }
+ #endif
+     _avPipController = avPipController;
++    msg_Dbg(_pipcontroller, "PiP controller prepared");
+
+
+     [_avPipController addObserver:self
+@@ -131,7 +157,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+                        context:(void *)context {
+     if (object==_avPipController) {
+         if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
+-            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", [change[NSKeyValueChangeNewKey] boolValue]);
++            BOOL isPossible = [change[NSKeyValueChangeNewKey] boolValue];
++            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", isPossible);
++            if (isPossible && _startRequestedWhenNotPossible) {
++                dispatch_async(dispatch_get_main_queue(), ^{
++                    [self _attemptStartPictureInPictureIfPossible];
++                });
++            }
+         }
+     } else {
+         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+@@ -224,9 +256,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+ #pragma mark - VLCDisplayPictureInPictureControlling
+
+ - (void)startPictureInPicture {
+-    AVPictureInPictureController *avPipController =
+-        (AVPictureInPictureController *)_avPipController;
+-    [avPipController startPictureInPicture];
++    msg_Dbg(_pipcontroller, "startPictureInPicture requested");
++    dispatch_async(dispatch_get_main_queue(), ^{
++        [self _attemptStartPictureInPictureIfPossible];
++    });
  }
 
-@@ -241,6 +264,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+ - (void)stopPictureInPicture {
+@@ -241,6 +274,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
@@ -102,6 +126,77 @@ index 7526f50a3f..e8ab779c75 100644
  @end
 
  static void SetDisplayLayer( pip_controller_t *pipcontroller, void *layer) {
+diff --git a/modules/video_output/apple/VLCSampleBufferDisplay.m b/modules/video_output/apple/VLCSampleBufferDisplay.m
+index 82b58387ce..3c1f6f97d2 100644
+--- a/modules/video_output/apple/VLCSampleBufferDisplay.m
++++ b/modules/video_output/apple/VLCSampleBufferDisplay.m
+@@ -691,8 +691,10 @@ shouldInheritContentsScale:(CGFloat)newScale
+     if (!self)
+         return nil;
+
+-    if (vd->cfg->window->type != VLC_WINDOW_TYPE_NSOBJECT)
++    if (vd->cfg->window->type != VLC_WINDOW_TYPE_NSOBJECT) {
++        msg_Err(vd, "samplebufferdisplay requires NSOBJECT window, got type=%d", vd->cfg->window->type);
+         return nil;
++    }
+
+     VLCView *window = (__bridge VLCView *)vd->cfg->window->handle.nsobject;
+     if (!window) {
+@@ -712,9 +714,13 @@ shouldInheritContentsScale:(CGFloat)newScale
+
+ - (void)preparePictureInPicture {
+     if ( !_pipcontroller)
++    {
++        msg_Dbg(_vd, "PiP controller unavailable in samplebufferdisplay");
+         return;
++    }
+
+     if ( _pipcontroller->ops->set_display_layer ) {
++        msg_Dbg(_vd, "Binding display layer to PiP controller");
+         _pipcontroller->ops->set_display_layer(
+             _pipcontroller,
+             (__bridge void*)_displayView.displayLayer
+@@ -1157,11 +1163,13 @@ static int Open (vout_display_t *vd,
+                  video_format_t *fmt, vlc_video_context *context)
+ {
+     if (var_InheritBool(vd, "force-darwin-legacy-display")) {
++        msg_Err(vd, "samplebufferdisplay disabled by force-darwin-legacy-display");
+         return VLC_EGENERIC;
+     }
+     // Display isn't compatible with 360 content hence opening with this kind
+     // of projection should fail if display use isn't forced
+     if (!vd->obj.force && fmt->projection_mode != PROJECTION_MODE_RECTANGULAR) {
++        msg_Err(vd, "samplebufferdisplay only supports rectangular projection");
+         return VLC_EGENERIC;
+     }
+
+@@ -1170,7 +1178,10 @@ static int Open (vout_display_t *vd,
+     if (!vlc_video_context_GetPrivate(context, VLC_VIDEO_CONTEXT_CVPX)) {
+         converter = CreateCVPXConverter(vd, fmt);
+         if (!converter)
++        {
++            msg_Err(vd, "failed to create software->CVPX converter for samplebufferdisplay");
+             return VLC_EGENERIC;
++        }
+     }
+
+     @autoreleasepool {
+@@ -1178,6 +1189,7 @@ static int Open (vout_display_t *vd,
+             [[VLCSampleBufferDisplay alloc] initWithVoutDisplay:vd];
+
+         if (sys == nil) {
++            msg_Err(vd, "samplebufferdisplay initWithVoutDisplay failed");
+             DeleteCVPXConverter(converter);
+             return VLC_ENOMEM;
+         }
+@@ -1197,6 +1209,7 @@ static int Open (vout_display_t *vd,
+         vd->ops = &ops;
+
+         vd->info.subpicture_chromas = sample_buffer_display_subfmts;
++        msg_Dbg(vd, "samplebufferdisplay opened successfully");
+
+         return VLC_SUCCESS;
+     }
 diff --git a/modules/video_output/apple/meson.build b/modules/video_output/apple/meson.build
 index a2f04f1e22..7bedea58a1 100644
 --- a/modules/video_output/apple/meson.build
