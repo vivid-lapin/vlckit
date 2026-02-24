@@ -1,13 +1,13 @@
-From 5db21bd6d6cedb4f13e3a2883ed0cd84f9cffbba Mon Sep 17 00:00:00 2001
+From c4d33aa6d898062a7addd32d0bc3c1b96a7b4a01 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am              |  9 ++++++++-
- .../apple/VLCPictureInPictureController.m     | 19 +++++++++++++++++++
- modules/video_output/apple/meson.build        | 14 ++++++++++++++
- 3 files changed, 41 insertions(+), 1 deletion(-)
+ modules/video_output/Makefile.am              |  9 ++++-
+ .../apple/VLCPictureInPictureController.m     | 35 ++++++++++++++++++-
+ modules/video_output/apple/meson.build        | 14 ++++++++
+ 3 files changed, 56 insertions(+), 2 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -36,10 +36,37 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..8af8cf2830 100644
+index 7526f50a3f..e8ab779c75 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
-@@ -226,6 +226,15 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -55,6 +55,9 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+ @end
+
+ @implementation VLCPictureInPictureController
++{
++    BOOL _startRequestedWhenNotPossible;
++}
+
+ - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
+     self = [super init];
+@@ -131,7 +134,15 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+                        context:(void *)context {
+     if (object==_avPipController) {
+         if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
+-            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", [change[NSKeyValueChangeNewKey] boolValue]);
++            BOOL isPossible = [change[NSKeyValueChangeNewKey] boolValue];
++            msg_Dbg(_pipcontroller, "isPictureInPicturePossible:%d", isPossible);
++            if (isPossible && _startRequestedWhenNotPossible) {
++                _startRequestedWhenNotPossible = NO;
++                [self invalidatePlaybackState];
++                AVPictureInPictureController *avPipController =
++                    (AVPictureInPictureController *)_avPipController;
++                [avPipController startPictureInPicture];
++            }
+         }
+     } else {
+         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+@@ -226,6 +237,18 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  - (void)startPictureInPicture {
      AVPictureInPictureController *avPipController =
          (AVPictureInPictureController *)_avPipController;
@@ -49,13 +76,16 @@ index 7526f50a3f..8af8cf2830 100644
 +    }
 +    if (@available(macOS 12.0, iOS 15.0, tvos 15.0, *)) {
 +        if (!avPipController.isPictureInPicturePossible) {
-+            msg_Err(_pipcontroller, "Cannot start PiP: isPictureInPicturePossible is false");
++            _startRequestedWhenNotPossible = YES;
++            msg_Err(_pipcontroller, "Cannot start PiP now: isPictureInPicturePossible is false, deferring start");
++            return;
 +        }
 +    }
++    [self invalidatePlaybackState];
      [avPipController startPictureInPicture];
  }
 
-@@ -241,6 +250,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -241,6 +264,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
