@@ -1,14 +1,14 @@
-From 826b961c7d22ac8ded8a5aea0d79e96ebba40176 Mon Sep 17 00:00:00 2001
+From fc79ed1546f7d0f1efde67686f170883b511c2e9 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
- modules/video_output/Makefile.am              |  9 +-
- .../apple/VLCPictureInPictureController.m     | 98 ++++++++++++++++++-
- .../apple/VLCSampleBufferDisplay.m            | 15 ++-
- modules/video_output/apple/meson.build        | 14 +++
- 4 files changed, 130 insertions(+), 6 deletions(-)
+ modules/video_output/Makefile.am              |   9 +-
+ .../apple/VLCPictureInPictureController.m     | 109 ++++++++++++++++--
+ .../apple/VLCSampleBufferDisplay.m            |  15 ++-
+ modules/video_output/apple/meson.build        |  14 +++
+ 4 files changed, 138 insertions(+), 9 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -37,7 +37,7 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..7547f73ae6 100644
+index 7526f50a3f..ec1e0e5939 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
 @@ -55,6 +55,75 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
@@ -139,7 +139,31 @@ index 7526f50a3f..7547f73ae6 100644
          }
      } else {
          [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-@@ -224,9 +300,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -175,15 +251,20 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+
+ - (CMTimeRange)pictureInPictureControllerTimeRangeForPlayback:(AVPictureInPictureController *)pictureInPictureController {
+     assert(_pipcontroller->media_cbs);
+-    //TODO: Handle media duration
+     void *mediaController = (__bridge void*)_drawable.mediaController;
+     const CMTimeRange live = CMTimeRangeMake(kCMTimeNegativeInfinity, kCMTimePositiveInfinity);
+-
++
++    bool seekable = _pipcontroller->media_cbs->is_media_seekable(mediaController);
++    if (!seekable)
++        return live;
++
+     int64_t length = _pipcontroller->media_cbs->media_length(mediaController);
+-    if (length == VLC_TICK_INVALID)
++    if (length == VLC_TICK_INVALID || length <= 0)
+         return live;
+
+     int64_t time = _pipcontroller->media_cbs->media_time(mediaController);
++    if (time < 0)
++        return live;
+
+     CFTimeInterval ca_now = CACurrentMediaTime();
+     CFTimeInterval time_sec = ((Float64)time) * 1e-3;
+@@ -224,9 +305,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  #pragma mark - VLCDisplayPictureInPictureControlling
 
  - (void)startPictureInPicture {
@@ -153,7 +177,7 @@ index 7526f50a3f..7547f73ae6 100644
  }
 
  - (void)stopPictureInPicture {
-@@ -241,6 +318,19 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -241,6 +323,19 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
