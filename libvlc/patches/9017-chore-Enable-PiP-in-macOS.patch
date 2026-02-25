@@ -1,14 +1,14 @@
-From bf57cfa1d62a8744788870ca04d8703ecc344f13 Mon Sep 17 00:00:00 2001
+From 826b961c7d22ac8ded8a5aea0d79e96ebba40176 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 23 Feb 2026 23:54:25 +0900
 Subject: [PATCH] chore: Enable PiP in macOS
 
 ---
  modules/video_output/Makefile.am              |  9 +-
- .../apple/VLCPictureInPictureController.m     | 93 ++++++++++++++++++-
+ .../apple/VLCPictureInPictureController.m     | 98 ++++++++++++++++++-
  .../apple/VLCSampleBufferDisplay.m            | 15 ++-
  modules/video_output/apple/meson.build        | 14 +++
- 4 files changed, 125 insertions(+), 6 deletions(-)
+ 4 files changed, 130 insertions(+), 6 deletions(-)
 
 diff --git a/modules/video_output/Makefile.am b/modules/video_output/Makefile.am
 index 62808377ed..ed6f4adb13 100644
@@ -37,10 +37,10 @@ index 62808377ed..ed6f4adb13 100644
  libvout_ios_plugin_la_SOURCES = video_output/opengl/display.c $(OPENGL_VOUT_COMMONSOURCES)
  libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
 diff --git a/modules/video_output/apple/VLCPictureInPictureController.m b/modules/video_output/apple/VLCPictureInPictureController.m
-index 7526f50a3f..ec86449e4f 100644
+index 7526f50a3f..7547f73ae6 100644
 --- a/modules/video_output/apple/VLCPictureInPictureController.m
 +++ b/modules/video_output/apple/VLCPictureInPictureController.m
-@@ -55,6 +55,73 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -55,6 +55,75 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  @end
 
  @implementation VLCPictureInPictureController
@@ -103,6 +103,8 @@ index 7526f50a3f..ec86449e4f 100644
 +            _startRequestedWhenNotPossible = YES;
 +            msg_Err(_pipcontroller, "Cannot start PiP now: isPictureInPicturePossible is false, deferring start");
 +            [self _logPipReadiness:avPipController];
++            [self invalidatePlaybackState];
++            [avPipController startPictureInPicture];
 +            return;
 +        }
 +    }
@@ -114,7 +116,7 @@ index 7526f50a3f..ec86449e4f 100644
 
  - (instancetype)initWithPipController:(pip_controller_t *)pipcontroller {
      self = [super init];
-@@ -105,6 +172,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -105,6 +174,7 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      }
  #endif
      _avPipController = avPipController;
@@ -122,7 +124,7 @@ index 7526f50a3f..ec86449e4f 100644
 
 
      [_avPipController addObserver:self
-@@ -131,7 +199,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -131,7 +201,13 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
                         context:(void *)context {
      if (object==_avPipController) {
          if ([keyPath isEqualToString:@"isPictureInPicturePossible"]) {
@@ -137,7 +139,7 @@ index 7526f50a3f..ec86449e4f 100644
          }
      } else {
          [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-@@ -224,9 +298,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -224,9 +300,10 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
  #pragma mark - VLCDisplayPictureInPictureControlling
 
  - (void)startPictureInPicture {
@@ -151,13 +153,16 @@ index 7526f50a3f..ec86449e4f 100644
  }
 
  - (void)stopPictureInPicture {
-@@ -241,6 +316,16 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
+@@ -241,6 +318,19 @@ API_AVAILABLE(ios(15.0), tvos(15.0), macosx(12.0))
      [avPipController invalidatePlaybackState];
  }
 
 +- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController
 + failedToStartPictureInPictureWithError:(NSError *)error {
-+    msg_Err(_pipcontroller, "PiP failed to start: %s", error.localizedDescription.UTF8String);
++    msg_Err(_pipcontroller, "PiP failed to start: domain=%s code=%ld desc=%s",
++            error.domain.UTF8String,
++            (long)error.code,
++            error.localizedDescription.UTF8String);
 +}
 +
 +- (void)pictureInPictureController:(AVPictureInPictureController *)pictureInPictureController
