@@ -1157,6 +1157,9 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 - (void)play
 {
     dispatch_async(_libVLCBackgroundQueue, ^{
+        if (_media) {
+            libvlc_media_player_set_media(_playerInstance, [_media libVLCMediaDescriptor]);
+        }
         libvlc_media_player_play(_playerInstance);
     });
 }
@@ -1622,7 +1625,7 @@ static const struct event_handler_entry
 - (void)mediaPlayerMediaChanged:(VLCMedia *)newMedia
 {
     [self willChangeValueForKey:@"media"];
-    if (_media != newMedia) {
+    if (_media != newMedia && ![_media isEqual: newMedia]) {
         _media = newMedia;
 
         [self willChangeValueForKey:@"time"];

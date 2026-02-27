@@ -379,11 +379,7 @@
 
 - (void)handleMediaMetaChanged:(const libvlc_meta_t)type
 {
-    /* Meta change events from VLC core always arrive with meta_type=0 (Title),
-       so we must clear the entire cache and re-fetch all keys to pick up
-       changes in NowPlaying, Description, Publisher, etc. */
     [self clearCache];
-    [self prefetch];
 }
 
 /* fetch and cache */
@@ -454,7 +450,7 @@
         cacheValue = _metaCache[@(key)];
     });
     
-    if (!cacheValue)
+    if (!cacheValue || cacheValue == (id)NSNull.null)
         cacheValue = [self fetchMetaDataForKey: key];
     
     return cacheValue;
@@ -498,7 +494,7 @@
 
     char *value = libvlc_media_get_meta(media_t, key);
     if (!value)
-        return NSNull.null;
+        return nil;
 
     NSString *str = @(value);
     free(value);
@@ -514,7 +510,7 @@
 
     char *value = libvlc_media_get_meta(media_t, key);
     if (!value)
-        return NSNull.null;
+        return nil;
 
     NSString *str = @(value);
     free(value);
@@ -530,7 +526,7 @@
 
     char *value = libvlc_media_get_meta(media_t, key);
     if (!value)
-        return NSNull.null;
+        return nil;
 
     NSNumber *num = @(atoi(value));
     free(value);
