@@ -1,15 +1,16 @@
-From 32a39e5fed0179c9eb34b373166370124b909727 Mon Sep 17 00:00:00 2001
+From 3d984fce7917e99faba04690f94c9aad8d7b95d3 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 21 Feb 2026 21:23:20 +0900
-Subject: [PATCH] feat: Add arib_dualmono stream filter
+Subject: [PATCH 1/3] feat: Add arib_dualmono stream filter
 
 ---
  contrib/src/tsreadex/SHA512SUMS               |   1 +
  contrib/src/tsreadex/rules.mak                |  24 ++
+ modules/demux/mpeg/ts_psi.c                   |  15 ++
  modules/stream_filter/Makefile.am             |   5 +
  .../arib_dualmono/arib_dualmono.cpp           | 209 ++++++++++++++++++
  modules/stream_filter/meson.build             |   8 +
- 5 files changed, 247 insertions(+)
+ 6 files changed, 262 insertions(+)
  create mode 100644 contrib/src/tsreadex/SHA512SUMS
  create mode 100644 contrib/src/tsreadex/rules.mak
  create mode 100644 modules/stream_filter/arib_dualmono/arib_dualmono.cpp
@@ -51,6 +52,32 @@ index 0000000000..3070b1995a
 +	cd $< && mkdir -p "$(PREFIX)/lib"
 +	cd $< && install -m 644 libtsreadex.a "$(PREFIX)/lib/"
 +	touch $@
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index fdf198e224..f0749a9d7b 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -2130,6 +2130,21 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+         }
+     }
+
++    /* Install ARIB dualmono filter */
++    if ( p_sys->standard == TS_STANDARD_ARIB && p_sys->stream == p_demux->s )
++    {
++        stream_t *wrapper = ts_stream_wrapper_New( p_demux->s );
++        if( wrapper )
++        {
++            p_sys->stream = vlc_stream_FilterNew( wrapper, "arib_dualmono" );
++            if( !p_sys->stream )
++            {
++                vlc_stream_Delete( wrapper );
++                p_sys->stream = p_demux->s;
++            }
++        }
++    }
++
+      /* Add arbitrary PID from here */
+     if ( p_sys->standard == TS_STANDARD_ATSC )
+     {
 diff --git a/modules/stream_filter/Makefile.am b/modules/stream_filter/Makefile.am
 index 1d6a5499b2..aa14a96201 100644
 --- a/modules/stream_filter/Makefile.am
