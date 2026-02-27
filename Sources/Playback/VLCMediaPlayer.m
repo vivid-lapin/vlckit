@@ -1625,7 +1625,7 @@ static const struct event_handler_entry
 - (void)mediaPlayerMediaChanged:(VLCMedia *)newMedia
 {
     [self willChangeValueForKey:@"media"];
-    if (_media != newMedia) {
+    if (_media != newMedia && ![_media isEqual: newMedia]) {
         _media = newMedia;
 
         [self willChangeValueForKey:@"time"];
