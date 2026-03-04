@@ -1,0 +1,38 @@
+From d56db2ec39969fd263f35aea9cdcc5dbbd61898f Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Thu, 5 Mar 2026 01:40:07 +0900
+Subject: [PATCH 2/2] fix: reshape video size on media replacement
+
+---
+ modules/video_output/apple/VLCVideoUIView.m | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/modules/video_output/apple/VLCVideoUIView.m b/modules/video_output/apple/VLCVideoUIView.m
+index 8f5d1d08e0..6f0aecc4e6 100644
+--- a/modules/video_output/apple/VLCVideoUIView.m
++++ b/modules/video_output/apple/VLCVideoUIView.m
+@@ -339,6 +339,7 @@
+     #if !defined(TARGET_OS_VISION) || !TARGET_OS_VISION
+         self.contentScaleFactor = self.window.screen.scale;
+     #endif
++    [self reshape];
+ }
+ 
+ - (void)layoutSubviews
+@@ -351,7 +352,12 @@
+     assert([NSThread isMainThread]);
+ 
+     CGSize viewSize = [self bounds].size;
+-    CGFloat scaleFactor = self.contentScaleFactor;
++    CGFloat scaleFactor = self.contentScaleFactor > 0.0 ? self.contentScaleFactor : 1.0;
++    if (self.window && self.window.screen) {
++        scaleFactor = self.window.screen.scale;
++    } else if (scaleFactor == 1.0) {
++        scaleFactor = [UIScreen mainScreen].scale;
++    }
+ 
+     /* We need to lock to ensure _wnd is still valid, see detachFromParent. */
+     vlc_mutex_lock(&_size_mutex);
+-- 
+2.39.1
+
