@@ -1,4 +1,4 @@
-From cbcfb7e4627584c799fa927670d099c3d572f391 Mon Sep 17 00:00:00 2001
+From 5960702bb809741c0c9b4f584dd163ec526f83a3 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 19 Feb 2026 02:08:01 +0900
 Subject: [PATCH 9014/9014] demux/mpeg: Enhance ARIB metadata mapping for
@@ -365,7 +365,7 @@ index a52efc85b6..d2b1d45526 100644
      }
      vlc_epg_Delete( p_epg );
 diff --git a/src/input/es_out.c b/src/input/es_out.c
-index d341adac71..a21a30148c 100644
+index d341adac71..28bb735ff5 100644
 --- a/src/input/es_out.c
 +++ b/src/input/es_out.c
 @@ -1848,7 +1848,8 @@ static void EsOutProgramMeta(es_out_sys_t *p_sys, input_source_t *source,
@@ -501,7 +501,7 @@ index d341adac71..a21a30148c 100644
 +
 +                if( psz_key == NULL || psz_value == NULL || *psz_key == '\0' )
 +                    continue;
-+                if( asprintf( &psz_extra_name, ARIB_META_EXTRA_PREFIX "%s", psz_key ) < 0 )
++                if( asprintf( &psz_extra_name, ARIB_META_EXTRA_PREFIX "%02d:%s", j, psz_key ) < 0 )
 +                    continue;
 +                vlc_meta_SetExtra( p_pgrm->p_meta, psz_extra_name, psz_value );
 +                free( psz_extra_name );
