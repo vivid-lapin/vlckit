@@ -39,6 +39,8 @@
 #import <VLCMediaPlayerTitleDescription.h>
 #if !TARGET_OS_IPHONE
 # import <VLCVideoView.h>
+#else
+# import <UIKit/UIKit.h>
 #endif // !TARGET_OS_IPHONE
 #ifdef HAVE_CONFIG_H
 # include "config.h"
@@ -442,6 +444,42 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 }
 
 @implementation VLCMediaPlayer
+
+#if TARGET_OS_IPHONE
+- (void)reattachVoutWindowIfNeededFromDrawable:(id)oldDrawable toDrawable:(id)newDrawable
+{
+    if (oldDrawable == nil || newDrawable == nil || oldDrawable == newDrawable)
+        return;
+
+    if (![oldDrawable isKindOfClass:[UIView class]] || ![newDrawable isKindOfClass:[UIView class]])
+        return;
+
+    UIView *oldContainer = (UIView *)oldDrawable;
+    UIView *newContainer = (UIView *)newDrawable;
+
+    void (^reattachBlock)(void) = ^{
+        UIView *voutWindowView = nil;
+        for (UIView *subview in oldContainer.subviews) {
+            if ([NSStringFromClass([subview class]) isEqualToString:@"VLCVideoUIView"]) {
+                voutWindowView = subview;
+                break;
+            }
+        }
+
+        if (voutWindowView == nil)
+            return;
+
+        voutWindowView.frame = newContainer.bounds;
+        voutWindowView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [newContainer addSubview:voutWindowView];
+    };
+
+    if ([NSThread isMainThread])
+        reattachBlock();
+    else
+        dispatch_async(dispatch_get_main_queue(), reattachBlock);
+}
+#endif
 @synthesize libraryInstance = _privateLibrary;
 
 /* Bindings */
@@ -581,8 +619,14 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 
 - (void)setDrawable:(id)aDrawable
 {
+    id previousDrawable = _drawable;
+
     // Make sure that this instance has been associated with the drawing canvas.
     _drawable = aDrawable;
+
+#if TARGET_OS_IPHONE
+    [self reattachVoutWindowIfNeededFromDrawable:previousDrawable toDrawable:aDrawable];
+#endif
 
     /* Note that ee need the caller to wait until the setter succeeded.
      * Otherwise, s/he might want to deploy the drawable while it isn’t ready yet. */

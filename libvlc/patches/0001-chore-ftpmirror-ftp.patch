@@ -1,0 +1,22 @@
+From d1b4db15772099543cf022d388c2e69729662ad4 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Wed, 4 Mar 2026 20:54:04 +0900
+Subject: [PATCH] chore: ftpmirror -> ftp
+
+---
+ extras/tools/packages.mak | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/extras/tools/packages.mak b/extras/tools/packages.mak
+index e48be5d5f5..cdf045042a 100644
+--- a/extras/tools/packages.mak
++++ b/extras/tools/packages.mak
+@@ -1,4 +1,4 @@
+-GNU=https://ftpmirror.gnu.org/gnu
++GNU=https://ftp.gnu.org/gnu
+ APACHE=https://downloads.apache.org/
+ SF=https://downloads.sourceforge.net/project
+ VIDEOLAN=https://downloads.videolan.org/pub/contrib
+-- 
+2.39.1
+
