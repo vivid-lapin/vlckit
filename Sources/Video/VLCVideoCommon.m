@@ -34,12 +34,7 @@
 
 + (id)layoutManager
 {
-	static id sLayoutManager = nil;
-	static dispatch_once_t onceToken;
-	dispatch_once(&onceToken, ^{
-		sLayoutManager = [[self alloc] init];
-	});
-    return sLayoutManager;
+    return [[self alloc] init];
 }
 
 /* CALayoutManager Implementation */
