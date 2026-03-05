@@ -1,17 +1,18 @@
-From d56db2ec39969fd263f35aea9cdcc5dbbd61898f Mon Sep 17 00:00:00 2001
+From 13be88f2ea4755acc79217372f5e3e71d180d94b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
-Date: Thu, 5 Mar 2026 01:40:07 +0900
-Subject: [PATCH 2/2] fix: reshape video size on media replacement
+Date: Fri, 6 Mar 2026 00:52:07 +0900
+Subject: [PATCH] fix: reshape video size on media replacement
 
 ---
- modules/video_output/apple/VLCVideoUIView.m | 8 +++++++-
- 1 file changed, 7 insertions(+), 1 deletion(-)
+ modules/video_output/apple/VLCVideoUIView.m | 9 ++++++++-
+ modules/video_output/window_macosx.m        | 6 +++---
+ 2 files changed, 11 insertions(+), 4 deletions(-)
 
 diff --git a/modules/video_output/apple/VLCVideoUIView.m b/modules/video_output/apple/VLCVideoUIView.m
-index 8f5d1d08e0..6f0aecc4e6 100644
+index 8f5d1d08e0..f585fc9005 100644
 --- a/modules/video_output/apple/VLCVideoUIView.m
 +++ b/modules/video_output/apple/VLCVideoUIView.m
-@@ -339,6 +339,7 @@
+@@ -339,10 +339,12 @@
      #if !defined(TARGET_OS_VISION) || !TARGET_OS_VISION
          self.contentScaleFactor = self.window.screen.scale;
      #endif
@@ -19,7 +20,12 @@ index 8f5d1d08e0..6f0aecc4e6 100644
  }
  
  - (void)layoutSubviews
-@@ -351,7 +352,12 @@
+ {
++    [super layoutSubviews];
+     [self reshape];
+ }
+ 
+@@ -351,7 +353,12 @@
      assert([NSThread isMainThread]);
  
      CGSize viewSize = [self bounds].size;
@@ -33,6 +39,33 @@ index 8f5d1d08e0..6f0aecc4e6 100644
  
      /* We need to lock to ensure _wnd is still valid, see detachFromParent. */
      vlc_mutex_lock(&_size_mutex);
+diff --git a/modules/video_output/window_macosx.m b/modules/video_output/window_macosx.m
+index ee9adbf7ab..b591325f4b 100644
+--- a/modules/video_output/window_macosx.m
++++ b/modules/video_output/window_macosx.m
+@@ -535,11 +535,11 @@ NS_ASSUME_NONNULL_BEGIN
+ 
+ - (void)mouseMovedInternal:(NSEvent *)event
+ {
+-    NSPoint pointInView = 
++    NSPoint pointInView =
+         [self convertPoint:event.locationInWindow fromView:nil];
+     if ([self mouse:pointInView inRect:self.bounds]) {
+         // Invert Y coordinates
+-        CGPoint pointInWindow = 
++        CGPoint pointInWindow =
+             CGPointMake(pointInView.x, self.bounds.size.height - pointInView.y);
+         NSPoint pointInBacking = [self convertPointToBacking:pointInWindow];
+         [_moduleDelegate reportMouseMoved:pointInBacking];
+@@ -787,7 +787,7 @@ static int EmbedOpen(vlc_window_t *wnd)
+         __block VLCVideoWindowContentView *contentView;
+         dispatch_sync(dispatch_get_main_queue(), ^{
+             contentView = [[VLCVideoWindowContentView alloc] initWithModuleDelegate:moduleDelegate];
+-            contentView.frame = drawable.frame;
++            contentView.frame = drawable.bounds;
+             [drawable addSubview:contentView];
+         });
+         if (unlikely(contentView == nil))
 -- 
 2.39.1
 
