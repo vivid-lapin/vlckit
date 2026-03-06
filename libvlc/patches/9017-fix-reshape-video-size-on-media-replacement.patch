@@ -1,18 +1,38 @@
-From 13be88f2ea4755acc79217372f5e3e71d180d94b Mon Sep 17 00:00:00 2001
+From 2410f157693f2ffd9ec35bcaae73d5d2eabc751e Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
-Date: Fri, 6 Mar 2026 00:52:07 +0900
-Subject: [PATCH] fix: reshape video size on media replacement
+Date: Fri, 6 Mar 2026 00:38:09 +0900
+Subject: [PATCH] try
 
 ---
- modules/video_output/apple/VLCVideoUIView.m | 9 ++++++++-
- modules/video_output/window_macosx.m        | 6 +++---
- 2 files changed, 11 insertions(+), 4 deletions(-)
+ modules/video_output/apple/VLCVideoUIView.m | 21 +++++++++++++++++----
+ modules/video_output/window_macosx.m        |  6 +++---
+ 2 files changed, 20 insertions(+), 7 deletions(-)
 
 diff --git a/modules/video_output/apple/VLCVideoUIView.m b/modules/video_output/apple/VLCVideoUIView.m
-index 8f5d1d08e0..f585fc9005 100644
+index 8f5d1d08e0..e85412cb50 100644
 --- a/modules/video_output/apple/VLCVideoUIView.m
 +++ b/modules/video_output/apple/VLCVideoUIView.m
-@@ -339,10 +339,12 @@
+@@ -137,10 +137,16 @@
+     }
+ 
+     CGSize size = self.viewContainerBounds.size;
+-    _width = size.width;
+-    _height = size.height;
++    CGFloat initialScaleFactor = 1.0;
++    #if !defined(TARGET_OS_VISION) || !TARGET_OS_VISION
++        initialScaleFactor = [UIScreen mainScreen].scale;
++    #endif
++    unsigned initialWidth = size.width * initialScaleFactor;
++    unsigned initialHeight = size.height * initialScaleFactor;
++    _width = initialWidth;
++    _height = initialHeight;
+     [self reportEvent:^{
+-        vlc_window_ReportSize(_wnd, size.width, size.height);
++        vlc_window_ReportSize(_wnd, initialWidth, initialHeight);
+     }];
+ 
+     return self;
+@@ -339,10 +345,12 @@
      #if !defined(TARGET_OS_VISION) || !TARGET_OS_VISION
          self.contentScaleFactor = self.window.screen.scale;
      #endif
@@ -25,7 +45,7 @@ index 8f5d1d08e0..f585fc9005 100644
      [self reshape];
  }
  
-@@ -351,7 +353,12 @@
+@@ -351,7 +359,12 @@
      assert([NSThread isMainThread]);
  
      CGSize viewSize = [self bounds].size;

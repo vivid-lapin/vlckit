@@ -28,8 +28,9 @@ jobs:
         run: ./Packaging/create-distributable-package.sh -x -m -d
         shell: bash
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
+          archive: false
           name: dmg
           path: "*.dmg"
       - name: Get current time
