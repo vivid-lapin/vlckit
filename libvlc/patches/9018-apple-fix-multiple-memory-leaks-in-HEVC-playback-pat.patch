@@ -1,13 +1,12 @@
-From 5e13bdaf3e6b4b90739bbe99970992617ba8caff Mon Sep 17 00:00:00 2001
+From 233df0c92a233a082c6756a09c7bbf610d71dbac Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 20 Mar 2026 17:29:15 +0900
 Subject: [PATCH] apple: fix multiple memory leaks in HEVC playback path
 
 ---
  modules/codec/videotoolbox/decoder.c                | 13 +++++++++----
- modules/codec/vt_utils.c                            |  6 +++++-
  modules/video_output/apple/VLCSampleBufferDisplay.m | 12 +++++++-----
- 3 files changed, 21 insertions(+), 10 deletions(-)
+ 2 files changed, 16 insertions(+), 9 deletions(-)
 
 diff --git a/modules/codec/videotoolbox/decoder.c b/modules/codec/videotoolbox/decoder.c
 index d09ada7a8a..27e8b57307 100644
@@ -47,30 +46,6 @@ index d09ada7a8a..27e8b57307 100644
      /* Unlock the mutex because decoder_NewPicture() is blocking. Indeed,
           * it can wait indefinitely when the input is paused. */
  
-diff --git a/modules/codec/vt_utils.c b/modules/codec/vt_utils.c
-index 7012a52ee7..f598724bd7 100644
---- a/modules/codec/vt_utils.c
-+++ b/modules/codec/vt_utils.c
-@@ -57,14 +57,18 @@ static void
- cvpxpic_destroy_cb(picture_context_t *opaque)
- {
-     struct cvpxpic_ctx *ctx = (struct cvpxpic_ctx *)opaque;
-+    vlc_video_context *vctx = opaque->vctx;
- 
-     if (vlc_atomic_rc_dec(&ctx->rc))
-     {
-         CFRelease(ctx->cvpx);
-         if (ctx->on_released_cb)
--            ctx->on_released_cb(opaque->vctx, ctx->nb_fields);
-+            ctx->on_released_cb(vctx, ctx->nb_fields);
-         free(opaque);
-     }
-+
-+    if (vctx)
-+        vlc_video_context_Release(vctx);
- }
- 
- static picture_context_t *
 diff --git a/modules/video_output/apple/VLCSampleBufferDisplay.m b/modules/video_output/apple/VLCSampleBufferDisplay.m
 index 82b58387ce..96b9f8afce 100644
 --- a/modules/video_output/apple/VLCSampleBufferDisplay.m
