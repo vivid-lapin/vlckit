@@ -1,0 +1,96 @@
+From f515d07ab19394d0ecdec0b8885979bd4e9124f5 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 20 Mar 2026 17:29:15 +0900
+Subject: [PATCH] apple: fix multiple memory leaks in HEVC playback path
+
+---
+ modules/codec/videotoolbox/decoder.c                | 11 ++++++++---
+ modules/codec/vt_utils.c                            |  4 +++-
+ modules/video_output/apple/VLCSampleBufferDisplay.m | 12 +++++++-----
+ 3 files changed, 18 insertions(+), 9 deletions(-)
+
+diff --git a/modules/codec/videotoolbox/decoder.c b/modules/codec/videotoolbox/decoder.c
+index d09ada7a8a..f288c5cd50 100644
+--- a/modules/codec/videotoolbox/decoder.c
++++ b/modules/codec/videotoolbox/decoder.c
+@@ -1996,6 +1996,7 @@ static int DecodeBlock(decoder_t *p_dec, block_t *p_block)
+     else
+     {
+         msg_Dbg(p_dec, "session rejected frame %"PRId64" with status %d", p_info->pts, (int)status);
++        free(p_info);
+         p_sys->sync_state = p_sys->start_sync_state;
+         vlc_mutex_lock(&p_sys->lock);
+         p_sys->vtsession_status = vtsession_status;
+@@ -2109,6 +2110,13 @@ static void DecoderCallback(void *decompressionOutputRefCon,
+     decoder_t *p_dec = (decoder_t *)decompressionOutputRefCon;
+     decoder_sys_t *p_sys = p_dec->p_sys;
+     frame_info_t *p_info = (frame_info_t *) sourceFrameRefCon;
++
++    if (unlikely(p_info == NULL))
++    {
++        msg_Err(p_dec, "critical: null sourceFrameRefCon in DecoderCallback");
++        return;
++    }
++
+     const bool b_field = p_info->b_field;
+ 
+     vlc_mutex_lock(&p_sys->lock);
+@@ -2159,9 +2167,6 @@ static void DecoderCallback(void *decompressionOutputRefCon,
+     if (CVPixelBufferGetDataSize(imageBuffer) == 0)
+         goto end;
+ 
+-    if (unlikely(p_info == NULL))
+-        goto end;
+-
+     /* Unlock the mutex because decoder_NewPicture() is blocking. Indeed,
+          * it can wait indefinitely when the input is paused. */
+ 
+diff --git a/modules/codec/vt_utils.c b/modules/codec/vt_utils.c
+index 7012a52ee7..9ca18f6378 100644
+--- a/modules/codec/vt_utils.c
++++ b/modules/codec/vt_utils.c
+@@ -57,14 +57,16 @@ static void
+ cvpxpic_destroy_cb(picture_context_t *opaque)
+ {
+     struct cvpxpic_ctx *ctx = (struct cvpxpic_ctx *)opaque;
++    vlc_video_context *vctx = opaque->vctx;
+ 
+     if (vlc_atomic_rc_dec(&ctx->rc))
+     {
+         CFRelease(ctx->cvpx);
+         if (ctx->on_released_cb)
+-            ctx->on_released_cb(opaque->vctx, ctx->nb_fields);
++            ctx->on_released_cb(vctx, ctx->nb_fields);
+         free(opaque);
+     }
++    vlc_video_context_Release(vctx);
+ }
+ 
+ static picture_context_t *
+diff --git a/modules/video_output/apple/VLCSampleBufferDisplay.m b/modules/video_output/apple/VLCSampleBufferDisplay.m
+index 82b58387ce..96b9f8afce 100644
+--- a/modules/video_output/apple/VLCSampleBufferDisplay.m
++++ b/modules/video_output/apple/VLCSampleBufferDisplay.m
+@@ -1059,12 +1059,14 @@ static void PrepareDisplay (vout_display_t *vd) {
+ static void Prepare (vout_display_t *vd, picture_t *pic,
+                      const vlc_render_subpicture *subpicture, vlc_tick_t date)
+ {
+-    PrepareDisplay(vd);
+-    if (pic) {
+-        RenderPicture(vd, pic, date);
+-    }
++    @autoreleasepool {
++        PrepareDisplay(vd);
++        if (pic) {
++            RenderPicture(vd, pic, date);
++        }
+ 
+-    RenderSubpicture(vd, subpicture);
++        RenderSubpicture(vd, subpicture);
++    }
+ }
+ 
+ static void Display(vout_display_t *vd, picture_t *pic)
+-- 
+2.39.1
+
