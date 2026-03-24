@@ -1,0 +1,34 @@
+From 30c0499bc7ec7b8f3a00cd4c70e85fc7d894940a Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 27 Mar 2026 01:18:11 +0900
+Subject: [PATCH] chore: enable gnutls
+
+---
+ extras/package/apple/build.conf | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
+index 92b1474832..0475313f3c 100644
+--- a/extras/package/apple/build.conf
++++ b/extras/package/apple/build.conf
+@@ -29,8 +29,6 @@ export VLC_DEPLOYMENT_TARGET_WATCHOS="7.5"
+ 
+ # Base contrib bootstrap options used on all OSes
+ export VLC_CONTRIB_OPTIONS_BASE=(
+-    --disable-gpl
+-    --disable-gnuv3
+     --enable-ad-clauses
+     --disable-disc
+     --disable-sdl
+@@ -59,7 +57,7 @@ export VLC_CONTRIB_OPTIONS_BASE=(
+     --enable-ass
+     --disable-fontconfig
+     --disable-vncclient
+-    --disable-gnutls
++    --enable-gnutls
+     --disable-lua
+     --disable-luac
+     --disable-aribb24
+-- 
+2.39.1
+
