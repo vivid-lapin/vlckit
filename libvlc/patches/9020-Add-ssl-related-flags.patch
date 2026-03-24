@@ -1,0 +1,122 @@
+From dc459022b139cf7e678b0e028bad1c869da08439 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Tue, 24 Mar 2026 21:42:01 +0900
+Subject: [PATCH] chore: Add ssl related flags
+
+---
+ contrib/src/openssl/SHA512SUMS  |  1 +
+ contrib/src/openssl/rules.mak   | 68 +++++++++++++++++++++++++++++++++
+ extras/package/apple/build.conf |  7 +++-
+ 3 files changed, 74 insertions(+), 2 deletions(-)
+ create mode 100644 contrib/src/openssl/SHA512SUMS
+ create mode 100644 contrib/src/openssl/rules.mak
+
+diff --git a/contrib/src/openssl/SHA512SUMS b/contrib/src/openssl/SHA512SUMS
+new file mode 100644
+index 0000000000..d8cb909864
+--- /dev/null
++++ b/contrib/src/openssl/SHA512SUMS
+@@ -0,0 +1 @@
++492cd2e0a7506e085d9840a929ead994390409a35c24e47e0cf44987920711b61f1513f21b7eee50e56f226b26cd654cda6dbd1f6e439563a93a8f0e530fefb5  openssl-3.6.1.tar.gz
+diff --git a/contrib/src/openssl/rules.mak b/contrib/src/openssl/rules.mak
+new file mode 100644
+index 0000000000..b2d919b962
+--- /dev/null
++++ b/contrib/src/openssl/rules.mak
+@@ -0,0 +1,68 @@
++# OpenSSL
++OPENSSL_VERSION := 3.6.1
++OPENSSL_URL := https://github.com/openssl/openssl/releases/download/openssl-$(OPENSSL_VERSION)/openssl-$(OPENSSL_VERSION).tar.gz
++
++$(TARBALLS)/openssl-$(OPENSSL_VERSION).tar.gz:
++	$(call download_pkg,$(OPENSSL_URL),openssl)
++
++.sum-openssl: openssl-$(OPENSSL_VERSION).tar.gz
++
++openssl: openssl-$(OPENSSL_VERSION).tar.gz .sum-openssl
++	$(UNPACK)
++	$(MOVE)
++
++OPENSSL_CONF := no-shared no-unit-test no-tests no-apps no-docs
++
++ifdef HAVE_MACOSX
++ifeq ($(ARCH),x86_64)
++OPENSSL_TARGET := darwin64-x86_64-cc
++else ifeq ($(ARCH),aarch64)
++OPENSSL_TARGET := darwin64-arm64-cc
++endif
++endif
++
++ifdef HAVE_IOS
++ifdef HAVE_SIMULATOR
++OPENSSL_TARGET := iossimulator-xcrun
++else ifeq ($(ARCH),aarch64)
++OPENSSL_TARGET := ios64-xcrun
++else
++OPENSSL_TARGET := ios-xcrun
++endif
++endif
++
++ifdef HAVE_TVOS
++OPENSSL_TARGET := tvos-xcrun
++endif
++
++ifdef HAVE_WATCHOS
++OPENSSL_TARGET := watchos-xcrun
++endif
++
++ifdef HAVE_XROS
++OPENSSL_TARGET := xros-xcrun
++endif
++
++# Fallback for other platforms
++ifndef OPENSSL_TARGET
++ifdef HAVE_WIN32
++ifeq ($(ARCH),x86_64)
++OPENSSL_TARGET := mingw64
++else
++OPENSSL_TARGET := mingw
++endif
++else ifdef HAVE_ANDROID
++# Android target needs more care, but we focus on Apple as per request
++OPENSSL_TARGET := linux-generic32
++else
++OPENSSL_TARGET := linux-x86_64
++endif
++endif
++
++.openssl: openssl
++	cd $< && $(HOSTVARS) ./Configure $(OPENSSL_TARGET) \
++		--prefix=$(PREFIX) \
++		$(OPENSSL_CONF)
++	cd $< && $(MAKE)
++	cd $< && $(MAKE) install_sw
++	touch $@
+diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
+index 92b1474832..cd144992f0 100644
+--- a/extras/package/apple/build.conf
++++ b/extras/package/apple/build.conf
+@@ -29,7 +29,7 @@ export VLC_DEPLOYMENT_TARGET_WATCHOS="7.5"
+ 
+ # Base contrib bootstrap options used on all OSes
+ export VLC_CONTRIB_OPTIONS_BASE=(
+-    --disable-gpl
++    --enable-gpl
+     --disable-gnuv3
+     --enable-ad-clauses
+     --disable-disc
+@@ -59,7 +59,10 @@ export VLC_CONTRIB_OPTIONS_BASE=(
+     --enable-ass
+     --disable-fontconfig
+     --disable-vncclient
+-    --disable-gnutls
++    --enable-gnutls
++    --disable-securetransport
++    --disable-libarchive
++    --enable-openssl
+     --disable-lua
+     --disable-luac
+     --disable-aribb24
+-- 
+2.39.1
+
