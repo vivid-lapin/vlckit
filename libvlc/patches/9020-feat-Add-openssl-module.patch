@@ -1,0 +1,463 @@
+From 785049485c70811ed8e860255a2ca2d09652bffa Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Tue, 24 Mar 2026 21:42:01 +0900
+Subject: [PATCH] feat: Add openssl module
+
+---
+ configure.ac                    |  12 ++
+ contrib/src/openssl/SHA512SUMS  |   1 +
+ contrib/src/openssl/rules.mak   |  68 ++++++++
+ extras/package/apple/build.conf |   3 +
+ modules/misc/Makefile.am        |   7 +
+ modules/misc/openssl.c          | 301 ++++++++++++++++++++++++++++++++
+ 6 files changed, 392 insertions(+)
+ create mode 100644 contrib/src/openssl/SHA512SUMS
+ create mode 100644 contrib/src/openssl/rules.mak
+ create mode 100644 modules/misc/openssl.c
+
+diff --git a/configure.ac b/configure.ac
+index ea348ce184..79713c3238 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -4776,6 +4776,18 @@ AM_CONDITIONAL([HAVE_GCRYPT], [test "${ac_cv_lib_gcrypt}" = "yes"])
+ dnl
+ dnl TLS/SSL
+ dnl
++AC_ARG_ENABLE([openssl],
++  AS_HELP_STRING([--enable-openssl], [OpenSSL TLS/SSL support (default enabled)]))
++AS_IF([test "${enable_openssl}" != "no"], [
++  PKG_CHECK_MODULES(OPENSSL, [openssl >= 1.1.0], [
++    VLC_ADD_PLUGIN([openssl])
++  ], [
++    AS_IF([test -n "${enable_openssl}"], [
++      AC_MSG_ERROR([${OPENSSL_PKG_ERRORS}.])
++    ])
++  ])
++])
++
+ AC_ARG_ENABLE([gnutls],
+   AS_HELP_STRING([--enable-gnutls], [GNU TLS TLS/SSL support (default enabled)]))
+ AS_IF([test "${enable_gnutls}" != "no"], [
+diff --git a/contrib/src/openssl/SHA512SUMS b/contrib/src/openssl/SHA512SUMS
+new file mode 100644
+index 0000000000..d8cb909864
+--- /dev/null
++++ b/contrib/src/openssl/SHA512SUMS
+@@ -0,0 +1 @@
++492cd2e0a7506e085d9840a929ead994390409a35c24e47e0cf44987920711b61f1513f21b7eee50e56f226b26cd654cda6dbd1f6e439563a93a8f0e530fefb5  openssl-3.6.1.tar.gz
+diff --git a/contrib/src/openssl/rules.mak b/contrib/src/openssl/rules.mak
+new file mode 100644
+index 0000000000..b2d919b962
+--- /dev/null
++++ b/contrib/src/openssl/rules.mak
+@@ -0,0 +1,68 @@
++# OpenSSL
++OPENSSL_VERSION := 3.6.1
++OPENSSL_URL := https://github.com/openssl/openssl/releases/download/openssl-$(OPENSSL_VERSION)/openssl-$(OPENSSL_VERSION).tar.gz
++
++$(TARBALLS)/openssl-$(OPENSSL_VERSION).tar.gz:
++	$(call download_pkg,$(OPENSSL_URL),openssl)
++
++.sum-openssl: openssl-$(OPENSSL_VERSION).tar.gz
++
++openssl: openssl-$(OPENSSL_VERSION).tar.gz .sum-openssl
++	$(UNPACK)
++	$(MOVE)
++
++OPENSSL_CONF := no-shared no-unit-test no-tests no-apps no-docs
++
++ifdef HAVE_MACOSX
++ifeq ($(ARCH),x86_64)
++OPENSSL_TARGET := darwin64-x86_64-cc
++else ifeq ($(ARCH),aarch64)
++OPENSSL_TARGET := darwin64-arm64-cc
++endif
++endif
++
++ifdef HAVE_IOS
++ifdef HAVE_SIMULATOR
++OPENSSL_TARGET := iossimulator-xcrun
++else ifeq ($(ARCH),aarch64)
++OPENSSL_TARGET := ios64-xcrun
++else
++OPENSSL_TARGET := ios-xcrun
++endif
++endif
++
++ifdef HAVE_TVOS
++OPENSSL_TARGET := tvos-xcrun
++endif
++
++ifdef HAVE_WATCHOS
++OPENSSL_TARGET := watchos-xcrun
++endif
++
++ifdef HAVE_XROS
++OPENSSL_TARGET := xros-xcrun
++endif
++
++# Fallback for other platforms
++ifndef OPENSSL_TARGET
++ifdef HAVE_WIN32
++ifeq ($(ARCH),x86_64)
++OPENSSL_TARGET := mingw64
++else
++OPENSSL_TARGET := mingw
++endif
++else ifdef HAVE_ANDROID
++# Android target needs more care, but we focus on Apple as per request
++OPENSSL_TARGET := linux-generic32
++else
++OPENSSL_TARGET := linux-x86_64
++endif
++endif
++
++.openssl: openssl
++	cd $< && $(HOSTVARS) ./Configure $(OPENSSL_TARGET) \
++		--prefix=$(PREFIX) \
++		$(OPENSSL_CONF)
++	cd $< && $(MAKE)
++	cd $< && $(MAKE) install_sw
++	touch $@
+diff --git a/extras/package/apple/build.conf b/extras/package/apple/build.conf
+index 92b1474832..35d38ad0a0 100644
+--- a/extras/package/apple/build.conf
++++ b/extras/package/apple/build.conf
+@@ -60,6 +60,9 @@ export VLC_CONTRIB_OPTIONS_BASE=(
+     --disable-fontconfig
+     --disable-vncclient
+     --disable-gnutls
++    --disable-securetransport
++    --disable-libarchive
++    --enable-openssl
+     --disable-lua
+     --disable-luac
+     --disable-aribb24
+diff --git a/modules/misc/Makefile.am b/modules/misc/Makefile.am
+index feed2abd3d..8cbd3452c6 100644
+--- a/modules/misc/Makefile.am
++++ b/modules/misc/Makefile.am
+@@ -36,6 +36,13 @@ endif
+ EXTRA_LTLIBRARIES += libgnutls_plugin.la
+ misc_LTLIBRARIES += $(LTLIBgnutls)
+ 
++libopenssl_plugin_la_SOURCES = misc/openssl.c
++libopenssl_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENSSL_CFLAGS)
++libopenssl_plugin_la_LIBADD = $(OPENSSL_LIBS)
++libopenssl_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(miscdir)'
++EXTRA_LTLIBRARIES += libopenssl_plugin.la
++misc_LTLIBRARIES += $(LTLIBopenssl)
++
+ if HAVE_DARWIN
+ libsecuretransport_plugin_la_SOURCES = misc/securetransport.c
+ libsecuretransport_plugin_la_CFLAGS = $(AM_CFLAGS) $(SECURETRANSPORT_CFLAGS)
+diff --git a/modules/misc/openssl.c b/modules/misc/openssl.c
+new file mode 100644
+index 0000000000..0fb8913ed7
+--- /dev/null
++++ b/modules/misc/openssl.c
+@@ -0,0 +1,301 @@
++/*****************************************************************************
++ * openssl.c
++ *****************************************************************************
++ * Copyright (C) 2024 VLC authors and VideoLAN
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU Lesser General Public License as published by
++ * the Free Software Foundation; either version 2.1 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
++ *****************************************************************************/
++
++#ifdef HAVE_CONFIG_H
++# include "config.h"
++#endif
++
++#include <vlc_common.h>
++#include <vlc_plugin.h>
++#include <vlc_tls.h>
++#include <vlc_fs.h>
++
++#include <openssl/ssl.h>
++#include <openssl/err.h>
++#include <openssl/x509v3.h>
++
++typedef struct vlc_tls_openssl {
++    vlc_tls_t tls;
++    SSL *ssl;
++    vlc_object_t *obj;
++} vlc_tls_openssl_t;
++
++static int openssl_Error(vlc_object_t *obj, const char *msg, int ret) {
++    unsigned long err = ERR_get_error();
++    if (err) {
++        char errbuf[256];
++        ERR_error_string_n(err, errbuf, sizeof(errbuf));
++        msg_Err(obj, "%s: %s (ret=%d)", msg, errbuf, ret);
++    } else {
++        msg_Err(obj, "%s (ret=%d)", msg, ret);
++    }
++    return -1;
++}
++
++/* Custom BIO for VLC transport */
++static int vlc_bio_write(BIO *b, const char *buf, int len) {
++    vlc_tls_t *sock = BIO_get_data(b);
++    BIO_clear_retry_flags(b);
++    ssize_t ret = vlc_tls_Write(sock, buf, len);
++    if (ret < 0) {
++        if (errno == EAGAIN || errno == EINTR)
++            BIO_set_retry_write(b);
++    }
++    return ret;
++}
++
++static int vlc_bio_read(BIO *b, char *buf, int len) {
++    vlc_tls_t *sock = BIO_get_data(b);
++    BIO_clear_retry_flags(b);
++    ssize_t ret = vlc_tls_Read(sock, buf, len, false);
++    if (ret < 0) {
++        if (errno == EAGAIN || errno == EINTR)
++            BIO_set_retry_read(b);
++    }
++    return ret;
++}
++
++static long vlc_bio_ctrl(BIO *b, int cmd, long num, void *ptr) {
++    (void)num; (void)ptr;
++    switch (cmd) {
++        case BIO_CTRL_FLUSH: return 1;
++        default: return 0;
++    }
++}
++
++static int vlc_bio_create(BIO *b) {
++    BIO_set_init(b, 1);
++    BIO_set_data(b, NULL);
++    BIO_set_shutdown(b, 0);
++    return 1;
++}
++
++static int vlc_bio_destroy(BIO *b) {
++    if (b == NULL) return 0;
++    return 1;
++}
++
++static BIO_METHOD *vlc_bio_method = NULL;
++
++static int openssl_GetFD(vlc_tls_t *tls, short *restrict events) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    BIO *b = SSL_get_rbio(priv->ssl);
++    vlc_tls_t *sock = BIO_get_data(b);
++    return vlc_tls_GetPollFD(sock, events);
++}
++
++static ssize_t openssl_Recv(vlc_tls_t *tls, struct iovec *iov, unsigned count) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    size_t rcvd = 0;
++
++    for (unsigned i = 0; i < count; i++) {
++        int ret = SSL_read(priv->ssl, iov[i].iov_base, iov[i].iov_len);
++        if (ret <= 0) {
++            int err = SSL_get_error(priv->ssl, ret);
++            if (rcvd > 0 || err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
++                break;
++            return -1;
++        }
++        rcvd += ret;
++        if ((size_t)ret < iov[i].iov_len)
++            break;
++    }
++    return rcvd;
++}
++
++static ssize_t openssl_Send(vlc_tls_t *tls, const struct iovec *iov, unsigned count) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    size_t sent = 0;
++
++    for (unsigned i = 0; i < count; i++) {
++        int ret = SSL_write(priv->ssl, iov[i].iov_base, iov[i].iov_len);
++        if (ret <= 0) {
++            int err = SSL_get_error(priv->ssl, ret);
++            if (sent > 0 || err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
++                break;
++            return -1;
++        }
++        sent += ret;
++        if ((size_t)ret < iov[i].iov_len)
++            break;
++    }
++    return sent;
++}
++
++static int openssl_Shutdown(vlc_tls_t *tls, bool duplex) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    (void)duplex;
++    int ret = SSL_shutdown(priv->ssl);
++    if (ret < 0)
++        return openssl_Error(priv->obj, "SSL shutdown failed", ret);
++    return 0;
++}
++
++static void openssl_Close(vlc_tls_t *tls) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    SSL_free(priv->ssl);
++    free(priv);
++}
++
++static const struct vlc_tls_operations openssl_ops = {
++    openssl_GetFD, openssl_Recv, openssl_Send, openssl_Shutdown, openssl_Close,
++};
++
++static int openssl_Handshake(vlc_tls_t *tls, char **restrict alp) {
++    vlc_tls_openssl_t *priv = (vlc_tls_openssl_t *)tls;
++    int ret = SSL_do_handshake(priv->ssl);
++    if (ret == 1) {
++        if (alp) {
++            const unsigned char *proto;
++            unsigned int len;
++            SSL_get0_alpn_selected(priv->ssl, &proto, &len);
++            if (len > 0)
++                *alp = strndup((const char *)proto, len);
++            else
++                *alp = NULL;
++        }
++        return 0;
++    }
++
++    int err = SSL_get_error(priv->ssl, ret);
++    if (err == SSL_ERROR_WANT_READ) return 1;
++    if (err == SSL_ERROR_WANT_WRITE) return 2;
++
++    openssl_Error(priv->obj, "Handshake failed", ret);
++    return -1;
++}
++
++static int openssl_ClientHandshake(vlc_tls_t *tls, const char *host,
++                                   const char *service, char **restrict alp) {
++    (void)host; (void)service;
++    return openssl_Handshake(tls, alp);
++}
++
++static vlc_tls_t *openssl_ClientSessionOpen(vlc_tls_client_t *crd, vlc_tls_t *sock,
++                                           const char *hostname, const char *const *alpn) {
++    vlc_tls_openssl_t *priv = malloc(sizeof(*priv));
++    if (unlikely(priv == NULL)) return NULL;
++
++    priv->obj = VLC_OBJECT(crd);
++    priv->ssl = SSL_new(crd->sys);
++    if (priv->ssl == NULL) {
++        free(priv);
++        return NULL;
++    }
++
++    BIO *b = BIO_new(vlc_bio_method);
++    if (b == NULL) {
++        SSL_free(priv->ssl);
++        free(priv);
++        return NULL;
++    }
++    BIO_set_data(b, sock);
++    SSL_set_bio(priv->ssl, b, b);
++
++    if (hostname) {
++        SSL_set_tlsext_host_name(priv->ssl, hostname);
++        X509_VERIFY_PARAM *param = SSL_get0_param(priv->ssl);
++        X509_VERIFY_PARAM_set1_host(param, hostname, 0);
++    }
++
++    if (alpn && *alpn) {
++        unsigned char protocols[256];
++        unsigned int len = 0;
++        for (int i = 0; alpn[i]; i++) {
++            size_t n = strlen(alpn[i]);
++            if (len + n + 1 > sizeof(protocols)) break;
++            protocols[len++] = n;
++            memcpy(protocols + len, alpn[i], n);
++            len += n;
++        }
++        SSL_set_alpn_protos(priv->ssl, protocols, len);
++    }
++
++    SSL_set_connect_state(priv->ssl);
++    priv->tls.ops = &openssl_ops;
++    return &priv->tls;
++}
++
++static void openssl_ClientDestroy(vlc_tls_client_t *crd) {
++    SSL_CTX_free(crd->sys);
++}
++
++static const struct vlc_tls_client_operations openssl_client_ops = {
++    openssl_ClientSessionOpen, openssl_ClientHandshake, openssl_ClientDestroy,
++};
++
++static int OpenClient(vlc_tls_client_t *crd) {
++    if (vlc_bio_method == NULL) {
++        vlc_bio_method = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "vlc_tls");
++        BIO_meth_set_write(vlc_bio_method, vlc_bio_write);
++        BIO_meth_set_read(vlc_bio_method, vlc_bio_read);
++        BIO_meth_set_ctrl(vlc_bio_method, vlc_bio_ctrl);
++        BIO_meth_set_create(vlc_bio_method, vlc_bio_create);
++        BIO_meth_set_destroy(vlc_bio_method, vlc_bio_destroy);
++    }
++
++    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
++    if (ctx == NULL) return VLC_EGENERIC;
++
++    /* Load trust anchors */
++    char *cafile = var_InheritString(crd, "openssl-cafile");
++    char *capath = var_InheritString(crd, "openssl-capath");
++
++    if (cafile || capath) {
++        if (!SSL_CTX_load_verify_locations(ctx, cafile, capath)) {
++            msg_Err(crd, "Failed to load verify locations (file: %s, path: %s)",
++                    cafile ? cafile : "default", capath ? capath : "default");
++        }
++    } else {
++        SSL_CTX_set_default_verify_paths(ctx);
++    }
++    free(cafile);
++    free(capath);
++
++    /* Allow ignoring verification for debugging if specified */
++    if (!var_InheritBool(crd, "openssl-no-verify")) {
++        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
++    } else {
++        msg_Warn(crd, "SSL verification disabled by configuration!");
++        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
++    }
++
++    crd->ops = &openssl_client_ops;
++    crd->sys = ctx;
++    return VLC_SUCCESS;
++}
++
++#define CAFILE_TEXT N_("Root CA file")
++#define CAFILE_LONGTEXT N_("Path to a file containing trusted root certificates in PEM format.")
++#define CAPATH_TEXT N_("Root CA directory")
++#define CAPATH_LONGTEXT N_("Path to a directory containing trusted root certificates.")
++#define NO_VERIFY_TEXT N_("Disable certificate verification")
++#define NO_VERIFY_LONGTEXT N_("Do not verify the server certificate. DANGEROUS: allows man-in-the-middle attacks.")
++
++vlc_module_begin()
++    set_shortname("OpenSSL")
++    set_description(N_("OpenSSL transport layer security"))
++    set_capability("tls client", 3)
++    set_callback(OpenClient)
++    set_subcategory(SUBCAT_ADVANCED_NETWORK)
++    add_loadfile("openssl-cafile", NULL, CAFILE_TEXT, CAFILE_LONGTEXT)
++    add_directory("openssl-capath", NULL, CAPATH_TEXT, CAPATH_LONGTEXT)
++    add_bool("openssl-no-verify", false, NO_VERIFY_TEXT, NO_VERIFY_LONGTEXT)
++vlc_module_end()
+-- 
+2.39.1
+
