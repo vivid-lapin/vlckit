@@ -1,18 +1,18 @@
-From e5c84a55ff270b3ed0e55568dcdd2315a97ac7f7 Mon Sep 17 00:00:00 2001
+From e562c1a7fb62ac843d50f077b1c1977aec71371c Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 5 Apr 2026 15:01:43 +0900
 Subject: [PATCH] libaribcaption: fix caption rendering size
 
 ---
- modules/codec/arib/libaribcaption.c | 31 +++++++++++----
+ modules/codec/arib/libaribcaption.c | 33 ++++++++++++----
  src/video_output/video_output.c     | 60 +++++++++++++++++------------
- 2 files changed, 60 insertions(+), 31 deletions(-)
+ 2 files changed, 62 insertions(+), 31 deletions(-)
 
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 0bf9a6228d..46300af6e8 100644
+index 0bf9a6228d..7be09e7e1f 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
-@@ -121,20 +121,37 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+@@ -121,20 +121,39 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
      const video_format_t *p_dst_format = cfg->video_dst;
  
      bool b_src_changed = p_src_format->i_visible_width  != cfg->prev_src->i_visible_width ||
@@ -41,7 +41,9 @@ index 0bf9a6228d..46300af6e8 100644
 +     * We use floor division and round down to even for height to slightly
 +     * round down as requested to avoid vertical overflow or alignment drift. */
 +    unsigned i_render_area_width  = i_src_visible_width;
-+    unsigned i_render_area_height = (i_src_visible_height * i_sar_den / i_sar_num) & ~1;
++    unsigned i_render_area_height = (i_src_visible_height * i_sar_den / i_sar_num);
++    if (i_render_area_height >= 2)
++        i_render_area_height -= 2;
 +
 +    if (b_src_changed) {
          vlc_mutex_lock(&p_sys->aribcc_lock);
@@ -56,7 +58,7 @@ index 0bf9a6228d..46300af6e8 100644
      const vlc_tick_t i_stream_date = p_spusys->i_pts + (cfg->pts - p_subpic->i_start);
  
      /* Retrieve the expected render status for detecting whether the subtitle image changed */
-@@ -144,7 +161,7 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+@@ -144,7 +163,7 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
      vlc_mutex_unlock(&p_sys->aribcc_lock);
      if (status == ARIBCC_RENDER_STATUS_GOT_IMAGE_UNCHANGED) {
          /* Skip rendering since images were not changed */
