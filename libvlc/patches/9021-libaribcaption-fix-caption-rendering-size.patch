@@ -1,0 +1,28 @@
+From ee844ef65b6b35ca3b85f3a5c4960ca5f1d25a71 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 5 Apr 2026 15:01:43 +0900
+Subject: [PATCH] libaribcaption: fix caption rendering size
+
+---
+ modules/codec/arib/libaribcaption.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
+index 0bf9a6228d..3721cb2d5a 100644
+--- a/modules/codec/arib/libaribcaption.c
++++ b/modules/codec/arib/libaribcaption.c
+@@ -125,10 +125,8 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+     bool b_dst_changed = !video_format_IsSimilar(cfg->prev_dst, p_dst_format);
+ 
+     unsigned i_render_area_width  = p_dst_format->i_visible_width;
+-    unsigned i_render_area_height = p_src_format->i_visible_height * p_dst_format->i_visible_width /
+-                                    p_src_format->i_visible_width;
++    unsigned i_render_area_height = p_dst_format->i_visible_height;
+     if (b_src_changed || b_dst_changed) {
+-        /* don't let library freely scale using either the min of width or height ratio */
+         vlc_mutex_lock(&p_sys->aribcc_lock);
+         aribcc_renderer_set_frame_size(p_sys->p_renderer, i_render_area_width,
+                                                           i_render_area_height);
+-- 
+2.39.1
+
