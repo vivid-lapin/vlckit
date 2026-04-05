@@ -1,4 +1,4 @@
-From 4c7b501b4373ae3fd57215698f18e8fd79ab1dd4 Mon Sep 17 00:00:00 2001
+From e5c84a55ff270b3ed0e55568dcdd2315a97ac7f7 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 5 Apr 2026 15:01:43 +0900
 Subject: [PATCH] libaribcaption: fix caption rendering size
@@ -66,7 +66,7 @@ index 0bf9a6228d..46300af6e8 100644
          }
      }
 diff --git a/src/video_output/video_output.c b/src/video_output/video_output.c
-index bd075b13df..b658e74576 100644
+index bd075b13df..e7331eb466 100644
 --- a/src/video_output/video_output.c
 +++ b/src/video_output/video_output.c
 @@ -1210,13 +1210,20 @@ static picture_t *ConvertRGBAAndBlend(vout_thread_sys_t *vout, picture_t *pic,
@@ -117,7 +117,7 @@ index bd075b13df..b658e74576 100644
 -    pic = filter_chain_VideoFilter(filterc, pic);
 -    filter_chain_Delete(filterc);
 +        filter_chain_Reset(filterc, &src,
-+                           NULL /* TODO output video context of blender */,
++                           picture_GetVideoContext(pic),
 +                           &dst);
  
 -    if (pic)
