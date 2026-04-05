@@ -1,17 +1,18 @@
-From b849e29fce4aaaa454238a48344588712b82e2bf Mon Sep 17 00:00:00 2001
+From 4c7b501b4373ae3fd57215698f18e8fd79ab1dd4 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 5 Apr 2026 15:01:43 +0900
 Subject: [PATCH] libaribcaption: fix caption rendering size
 
 ---
- modules/codec/arib/libaribcaption.c | 28 +++++++++++++++++++++-------
- 1 file changed, 21 insertions(+), 7 deletions(-)
+ modules/codec/arib/libaribcaption.c | 31 +++++++++++----
+ src/video_output/video_output.c     | 60 +++++++++++++++++------------
+ 2 files changed, 60 insertions(+), 31 deletions(-)
 
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 0bf9a6228d..c5256e901a 100644
+index 0bf9a6228d..46300af6e8 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
-@@ -121,14 +121,28 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+@@ -121,20 +121,37 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
      const video_format_t *p_dst_format = cfg->video_dst;
  
      bool b_src_changed = p_src_format->i_visible_width  != cfg->prev_src->i_visible_width ||
@@ -37,16 +38,25 @@ index 0bf9a6228d..c5256e901a 100644
 +     * This avoids horizontal scaling during blending, which can help resolve
 +     * blending failures on hardware buffers like CVPN (HEVC 10-bit).
 +     *
-+     * We use floor division for height to slightly round down as requested
-+     * to avoid vertical overflow or alignment drift. */
++     * We use floor division and round down to even for height to slightly
++     * round down as requested to avoid vertical overflow or alignment drift. */
 +    unsigned i_render_area_width  = i_src_visible_width;
-+    unsigned i_render_area_height = i_src_visible_height * i_sar_den / i_sar_num;
++    unsigned i_render_area_height = (i_src_visible_height * i_sar_den / i_sar_num) & ~1;
 +
 +    if (b_src_changed) {
          vlc_mutex_lock(&p_sys->aribcc_lock);
          aribcc_renderer_set_frame_size(p_sys->p_renderer, i_render_area_width,
                                                            i_render_area_height);
-@@ -144,7 +158,7 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+         vlc_mutex_unlock(&p_sys->aribcc_lock);
+     }
+ 
++    p_subpic->i_original_picture_width = i_render_area_width;
++    p_subpic->i_original_picture_height = i_render_area_height;
++
+     const vlc_tick_t i_stream_date = p_spusys->i_pts + (cfg->pts - p_subpic->i_start);
+ 
+     /* Retrieve the expected render status for detecting whether the subtitle image changed */
+@@ -144,7 +161,7 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
      vlc_mutex_unlock(&p_sys->aribcc_lock);
      if (status == ARIBCC_RENDER_STATUS_GOT_IMAGE_UNCHANGED) {
          /* Skip rendering since images were not changed */
@@ -55,6 +65,97 @@ index 0bf9a6228d..c5256e901a 100644
              return;
          }
      }
+diff --git a/src/video_output/video_output.c b/src/video_output/video_output.c
+index bd075b13df..b658e74576 100644
+--- a/src/video_output/video_output.c
++++ b/src/video_output/video_output.c
+@@ -1210,13 +1210,20 @@ static picture_t *ConvertRGBAAndBlend(vout_thread_sys_t *vout, picture_t *pic,
+                                       vlc_render_subpicture *subpic)
+ {
+     vout_thread_sys_t *sys = vout;
+-    /* This function will convert the pic to RGBA and blend the subpic to it.
++    /* This function will convert the pic to a software format and blend the subpic to it.
+      * The returned pic can't be used to display since the chroma will be
+      * different than the "vout display" one, but it can be used for snapshots.
+      * */
+ 
+     assert(sys->spu_blend);
+ 
++    static const vlc_fourcc_t candidates[] = {
++        VLC_CODEC_I420,
++        VLC_CODEC_NV12,
++        VLC_CODEC_RGB24,
++        VLC_CODEC_RGBA,
++    };
++
+     filter_owner_t owner = {
+         .video = &vout_video_cbs,
+         .sys = vout,
+@@ -1226,36 +1233,41 @@ static picture_t *ConvertRGBAAndBlend(vout_thread_sys_t *vout, picture_t *pic,
+         return NULL;
+ 
+     es_format_t src = sys->spu_blend->fmt_out;
+-    es_format_t dst = src;
+-    dst.video.i_chroma = VLC_CODEC_RGBA;
+-
+-    filter_chain_Reset(filterc, &src,
+-                       NULL /* TODO output video context of blender */,
+-                       &dst);
++    picture_t *converted = NULL;
+ 
+-    if (filter_chain_AppendConverter(filterc, &dst) != VLC_SUCCESS)
++    for (size_t i = 0; i < ARRAY_SIZE(candidates) && converted == NULL; ++i)
+     {
+-        filter_chain_Delete(filterc);
+-        return NULL;
+-    }
++        es_format_t dst = src;
++        dst.i_codec = candidates[i];
++        dst.video.i_chroma = candidates[i];
+ 
+-    picture_Hold(pic);
+-    pic = filter_chain_VideoFilter(filterc, pic);
+-    filter_chain_Delete(filterc);
++        filter_chain_Reset(filterc, &src,
++                           NULL /* TODO output video context of blender */,
++                           &dst);
+ 
+-    if (pic)
+-    {
+-        vlc_blender_t *swblend = filter_NewBlend(VLC_OBJECT(&vout->obj), &dst.video);
+-        if (swblend)
++        if (filter_chain_AppendConverter(filterc, &dst) != VLC_SUCCESS)
++            continue;
++
++        picture_Hold(pic);
++        converted = filter_chain_VideoFilter(filterc, pic);
++
++        if (converted)
+         {
+-            bool success = picture_BlendSubpicture(pic, swblend, subpic) > 0;
+-            filter_DeleteBlend(swblend);
+-            if (success)
+-                return pic;
++            vlc_blender_t *swblend = filter_NewBlend(VLC_OBJECT(&vout->obj), &dst.video);
++            if (swblend)
++            {
++                bool success = picture_BlendSubpicture(converted, swblend, subpic) > 0;
++                filter_DeleteBlend(swblend);
++                if (success)
++                    break;
++            }
++            picture_Release(converted);
++            converted = NULL;
+         }
+-        picture_Release(pic);
+     }
+-    return NULL;
++
++    filter_chain_Delete(filterc);
++    return converted;
+ }
+ 
+ static picture_t *FilterPictureInteractive(vout_thread_sys_t *sys)
 -- 
 2.39.1
 
