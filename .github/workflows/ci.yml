@@ -24,7 +24,7 @@ jobs:
         run: ./Packaging/create-distributable-package.sh -x -d
         shell: bash
       - name: Build (Full)
-        if: ${{ github.event_name != 'pull_request' }}
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.release == 'true'
         run: ./Packaging/create-distributable-package.sh -x -m -d
         shell: bash
       - name: Upload
@@ -34,14 +34,14 @@ jobs:
           path: "*.dmg"
           archive: false
       - name: Get current time
-        if: ${{ github.event.inputs.release }}
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.release == 'true'
         uses: josStorer/get-current-time@v2
         id: time
         with:
           format: "YYYYMMDDHHmm"
           utcOffset: "+09:00"
       - name: Release
-        if: ${{ github.event.inputs.release }}
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/master') || github.event.inputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: "*.dmg"
