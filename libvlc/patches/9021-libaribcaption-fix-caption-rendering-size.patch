@@ -1,38 +1,39 @@
-From 32750c21e3f36f74801ec0a707d625daef7e25f9 Mon Sep 17 00:00:00 2001
+From 5899546c844f2b8ad88c05196818c579be1802c2 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Mon, 6 Apr 2026 20:04:54 +0900
-Subject: [PATCH 11/11] libaribcaption: fix caption rendering size
+Subject: [PATCH] libaribcaption: fix caption rendering size
 
 ---
- modules/codec/arib/libaribcaption.c | 8 +++++---
- 1 file changed, 5 insertions(+), 3 deletions(-)
+ modules/codec/arib/libaribcaption.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
 
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 0bf9a6228d..7763ec582d 100644
+index 0bf9a6228d..d0e87d2ee3 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
-@@ -124,9 +124,8 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
-                          p_src_format->i_visible_height != cfg->prev_src->i_visible_height;
+@@ -121,12 +121,18 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+     const video_format_t *p_dst_format = cfg->video_dst;
+ 
+     bool b_src_changed = p_src_format->i_visible_width  != cfg->prev_src->i_visible_width ||
+-                         p_src_format->i_visible_height != cfg->prev_src->i_visible_height;
++                         p_src_format->i_visible_height != cfg->prev_src->i_visible_height ||
++                         p_src_format->i_sar_num != cfg->prev_src->i_sar_num ||
++                         p_src_format->i_sar_den != cfg->prev_src->i_sar_den;
      bool b_dst_changed = !video_format_IsSimilar(cfg->prev_dst, p_dst_format);
  
 -    unsigned i_render_area_width  = p_dst_format->i_visible_width;
 -    unsigned i_render_area_height = p_src_format->i_visible_height * p_dst_format->i_visible_width /
 -                                    p_src_format->i_visible_width;
-+    unsigned i_render_area_width  = p_dst_format->i_visible_width & ~1;
-+    unsigned i_render_area_height = p_dst_format->i_visible_height & ~1;
++    unsigned i_src_visible_width = p_src_format->i_visible_width;
++    unsigned i_src_visible_height = p_src_format->i_visible_height;
++    unsigned i_sar_num = p_src_format->i_sar_num > 0 ? p_src_format->i_sar_num : 1;
++    unsigned i_sar_den = p_src_format->i_sar_den > 0 ? p_src_format->i_sar_den : 1;
++
++    unsigned i_render_area_width  = i_src_visible_width * i_sar_num / i_sar_den;
++    unsigned i_render_area_height = i_src_visible_height & ~1;
      if (b_src_changed || b_dst_changed) {
          /* don't let library freely scale using either the min of width or height ratio */
          vlc_mutex_lock(&p_sys->aribcc_lock);
-@@ -135,6 +134,9 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
-         vlc_mutex_unlock(&p_sys->aribcc_lock);
-     }
- 
-+    p_subpic->i_original_picture_width = i_render_area_width;
-+    p_subpic->i_original_picture_height = i_render_area_height;
-+
-     const vlc_tick_t i_stream_date = p_spusys->i_pts + (cfg->pts - p_subpic->i_start);
- 
-     /* Retrieve the expected render status for detecting whether the subtitle image changed */
 -- 
 2.39.1
 
