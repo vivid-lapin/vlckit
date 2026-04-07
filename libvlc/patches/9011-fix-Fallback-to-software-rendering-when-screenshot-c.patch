@@ -1,15 +1,15 @@
-From abecf408b50bc93df4cd1a04f64484ab9539f77b Mon Sep 17 00:00:00 2001
+From b0c0fe6992d68fe74d6aa9e279573ad474a0853a Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Wed, 18 Feb 2026 00:55:23 +0900
-Subject: [PATCH 9011/9014] fix: Fallback to software rendering when screenshot
+Subject: [PATCH 01/11] fix: Fallback to software rendering when screenshot
  capture fails
 
 ---
- src/video_output/video_output.c | 58 +++++++++++++++++++++++++++++++--
- 1 file changed, 55 insertions(+), 3 deletions(-)
+ src/video_output/video_output.c | 118 ++++++++++++++++++++++++--------
+ 1 file changed, 91 insertions(+), 27 deletions(-)
 
 diff --git a/src/video_output/video_output.c b/src/video_output/video_output.c
-index 0ec4d219ab..bd075b13df 100644
+index 0ec4d219ab..e7331eb466 100644
 --- a/src/video_output/video_output.c
 +++ b/src/video_output/video_output.c
 @@ -407,6 +407,47 @@ void vout_PutPicture(vout_thread_t *vout, picture_t *picture)
@@ -84,6 +84,93 @@ index 0ec4d219ab..bd075b13df 100644
              msg_Err(vout, "Failed to convert image for snapshot");
              picture_Release(picture);
              return VLC_EGENERIC;
+@@ -1158,13 +1210,20 @@ static picture_t *ConvertRGBAAndBlend(vout_thread_sys_t *vout, picture_t *pic,
+                                       vlc_render_subpicture *subpic)
+ {
+     vout_thread_sys_t *sys = vout;
+-    /* This function will convert the pic to RGBA and blend the subpic to it.
++    /* This function will convert the pic to a software format and blend the subpic to it.
+      * The returned pic can't be used to display since the chroma will be
+      * different than the "vout display" one, but it can be used for snapshots.
+      * */
+ 
+     assert(sys->spu_blend);
+ 
++    static const vlc_fourcc_t candidates[] = {
++        VLC_CODEC_I420,
++        VLC_CODEC_NV12,
++        VLC_CODEC_RGB24,
++        VLC_CODEC_RGBA,
++    };
++
+     filter_owner_t owner = {
+         .video = &vout_video_cbs,
+         .sys = vout,
+@@ -1174,36 +1233,41 @@ static picture_t *ConvertRGBAAndBlend(vout_thread_sys_t *vout, picture_t *pic,
+         return NULL;
+ 
+     es_format_t src = sys->spu_blend->fmt_out;
+-    es_format_t dst = src;
+-    dst.video.i_chroma = VLC_CODEC_RGBA;
++    picture_t *converted = NULL;
+ 
+-    filter_chain_Reset(filterc, &src,
+-                       NULL /* TODO output video context of blender */,
+-                       &dst);
+-
+-    if (filter_chain_AppendConverter(filterc, &dst) != VLC_SUCCESS)
++    for (size_t i = 0; i < ARRAY_SIZE(candidates) && converted == NULL; ++i)
+     {
+-        filter_chain_Delete(filterc);
+-        return NULL;
+-    }
++        es_format_t dst = src;
++        dst.i_codec = candidates[i];
++        dst.video.i_chroma = candidates[i];
+ 
+-    picture_Hold(pic);
+-    pic = filter_chain_VideoFilter(filterc, pic);
+-    filter_chain_Delete(filterc);
++        filter_chain_Reset(filterc, &src,
++                           picture_GetVideoContext(pic),
++                           &dst);
+ 
+-    if (pic)
+-    {
+-        vlc_blender_t *swblend = filter_NewBlend(VLC_OBJECT(&vout->obj), &dst.video);
+-        if (swblend)
++        if (filter_chain_AppendConverter(filterc, &dst) != VLC_SUCCESS)
++            continue;
++
++        picture_Hold(pic);
++        converted = filter_chain_VideoFilter(filterc, pic);
++
++        if (converted)
+         {
+-            bool success = picture_BlendSubpicture(pic, swblend, subpic) > 0;
+-            filter_DeleteBlend(swblend);
+-            if (success)
+-                return pic;
++            vlc_blender_t *swblend = filter_NewBlend(VLC_OBJECT(&vout->obj), &dst.video);
++            if (swblend)
++            {
++                bool success = picture_BlendSubpicture(converted, swblend, subpic) > 0;
++                filter_DeleteBlend(swblend);
++                if (success)
++                    break;
++            }
++            picture_Release(converted);
++            converted = NULL;
+         }
+-        picture_Release(pic);
+     }
+-    return NULL;
++
++    filter_chain_Delete(filterc);
++    return converted;
+ }
+ 
+ static picture_t *FilterPictureInteractive(vout_thread_sys_t *sys)
 -- 
 2.39.1
 
