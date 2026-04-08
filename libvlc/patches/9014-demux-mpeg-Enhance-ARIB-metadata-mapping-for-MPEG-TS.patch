@@ -1,16 +1,16 @@
-From f39f0550ee48c125d0535151b5553ea62fa9d625 Mon Sep 17 00:00:00 2001
+From ce45c81c615c91a441402ffc75b375e1938de284 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 19 Feb 2026 02:08:01 +0900
-Subject: [PATCH 1/4] demux/mpeg: Enhance ARIB metadata mapping for MPEG-TS
+Subject: [PATCH 1/8] demux/mpeg: Enhance ARIB metadata mapping for MPEG-TS
  with additional fields
 
 ---
- modules/demux/mpeg/ts_si.c | 271 +++++++++++++++++++++++++------------
- src/input/es_out.c         | 145 +++++++++++++++++++-
- 2 files changed, 323 insertions(+), 93 deletions(-)
+ modules/demux/mpeg/ts_si.c | 281 +++++++++++++++++++++++++------------
+ src/input/es_out.c         | 145 ++++++++++++++++++-
+ 2 files changed, 333 insertions(+), 93 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts_si.c b/modules/demux/mpeg/ts_si.c
-index a52efc85b6..d2b1d45526 100644
+index a52efc85b6..f3f4bbe606 100644
 --- a/modules/demux/mpeg/ts_si.c
 +++ b/modules/demux/mpeg/ts_si.c
 @@ -281,6 +281,18 @@ static void SDTCallBack( void *opaque, dvbpsi_sdt_t *p_sdt )
@@ -40,7 +40,7 @@ index a52efc85b6..d2b1d45526 100644
  
  
      p_sys->i_network_time = EITConvertStartTime( p_tdt->i_utc_time );
-@@ -412,86 +425,161 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
+@@ -412,86 +425,171 @@ static void TDTCallBack( void *opaque, dvbpsi_tot_t *p_tdt )
      dvbpsi_tot_delete(p_tdt);
  
      es_out_Control( p_demux->out, ES_OUT_SET_EPG_TIME, (int64_t) p_sys->i_network_time );
@@ -48,14 +48,24 @@ index a52efc85b6..d2b1d45526 100644
 +    if( b_first_time_meta )
 +    {
 +        char psz_first_network_time[32];
++        char psz_network_demux_time[32];
++        int64_t i_demux_time = -1;
 +
-+        if( snprintf( psz_first_network_time, sizeof(psz_first_network_time),
-+                      "%"PRId64, (int64_t)p_sys->i_network_time ) > 0 )
++        if( demux_Control( p_demux, DEMUX_GET_TIME, &i_demux_time ) != VLC_SUCCESS )
++            i_demux_time = -1;
++
++        if( i_demux_time >= 0 )
 +        {
 +            vlc_meta_t *p_meta = vlc_meta_New();
 +            if( p_meta )
 +            {
-+                vlc_meta_SetExtra( p_meta, "FirstNetworkTime", psz_first_network_time );
++                char psz_initial_network_time[32];
++                double d_initial_network_time = (double)p_sys->i_network_time - ((double)i_demux_time / 1000000.0);
++                if( snprintf( psz_initial_network_time, sizeof(psz_initial_network_time),
++                              "%.6f", d_initial_network_time ) > 0 )
++                {
++                    vlc_meta_SetExtra( p_meta, "InitialNetworkTime", psz_initial_network_time );
++                }
 +                es_out_Control( p_demux->out, ES_OUT_SET_GROUP_META, -1, p_meta );
 +                vlc_meta_Delete( p_meta );
 +            }
@@ -234,7 +244,7 @@ index a52efc85b6..d2b1d45526 100644
 +            free( psz_key );
 +            free( psz_val );
 +            continue;
-+        }
+         }
 +
 +        if( p_evt->i_description_items >= INT_MAX ||
 +            (size_t)p_evt->i_description_items >= SIZE_MAX / sizeof(*p_evt->description_items) )
@@ -252,7 +262,7 @@ index a52efc85b6..d2b1d45526 100644
 +            free( psz_key );
 +            free( psz_val );
 +            break;
-         }
++        }
 +
 +        p_evt->description_items = p_realloc;
 +        p_evt->description_items[p_evt->i_description_items].psz_key = psz_key;
@@ -263,7 +273,7 @@ index a52efc85b6..d2b1d45526 100644
      }
  }
  
-@@ -535,6 +623,11 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -535,6 +633,11 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
          dvbpsi_descriptor_t *p_dr;
          int64_t i_start;
          int i_duration;
@@ -275,7 +285,7 @@ index a52efc85b6..d2b1d45526 100644
  
          i_start = EITConvertStartTime( p_evt->i_start_time );
          SI_DEBUG_TIMESHIFT(i_start);
-@@ -606,32 +699,12 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -606,32 +709,12 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
  
                      if( pE->i_text_length > 0 )
                      {
@@ -312,7 +322,7 @@ index a52efc85b6..d2b1d45526 100644
                  }
              }
                  break;
-@@ -664,6 +737,22 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -664,6 +747,22 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
              }
          }
  
@@ -335,7 +345,7 @@ index a52efc85b6..d2b1d45526 100644
          switch ( p_evt->i_running_status )
          {
              case TS_SI_RUNSTATUS_RUNNING:
-@@ -687,8 +776,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -687,8 +786,18 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
      if( i_runevt || i_fallbackevt )
          vlc_epg_SetCurrent( p_epg, (i_runevt) ? i_runevt : i_fallbackevt );
  
@@ -354,7 +364,7 @@ index a52efc85b6..d2b1d45526 100644
          if( p_epg->b_present && p_epg->p_current )
          {
              ts_pat_t *p_pat = ts_pid_Get(&p_sys->pids, 0)->u.p_pat;
-@@ -698,8 +797,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
+@@ -698,8 +807,8 @@ static void EITCallBack( void *opaque, dvbpsi_eit_t *p_eit )
                  p_pmt->eit.i_event_start = p_epg->p_current->i_start;
                  p_pmt->eit.i_event_length = p_epg->p_current->i_duration;
              }
