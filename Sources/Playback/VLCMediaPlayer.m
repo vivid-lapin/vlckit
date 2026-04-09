@@ -441,6 +441,27 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
     }
 }
 
+static void HandleMediaPlayerAribText(const char *text, void *opaque)
+{
+    @autoreleasepool {
+        NSString *aribText = text ? [NSString stringWithUTF8String:text] : nil;
+        NSLog(@"HandleMediaPlayerAribText received: %@", aribText);
+        // Since we are not using VLCEventsHandler, we need to dispatch manually to the main thread
+        // We could also use VLCEventsHandler if preferred.
+        VLCMediaPlayer *player = (__bridge VLCMediaPlayer *)opaque;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (player.aribTextUpdatedBlock) {
+                player.aribTextUpdatedBlock(aribText);
+            }
+            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateAribText:)]) {
+                [player.delegate mediaPlayer:player didUpdateAribText:aribText];
+            } else {
+                NSLog(@"VLCMediaPlayer: delegate does not respond to mediaPlayer:didUpdateAribText:");
+            }
+        });
+    }
+}
+
 @implementation VLCMediaPlayer
 @synthesize libraryInstance = _privateLibrary;
 
@@ -494,6 +515,8 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
         }
 
         [self registerObservers];
+        
+        libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
     }
     return self;
 
@@ -511,6 +534,8 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
         _playerInstance = playerInstance;
 
         [self registerObservers];
+        
+        libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
     }
     return self;
 }
@@ -563,6 +588,8 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 
     if (_viewpoint)
         libvlc_free(_viewpoint);
+
+    libvlc_video_set_arib_text_callbacks(_playerInstance, NULL, NULL);
 
     libvlc_media_player_release(_playerInstance);
 }
@@ -1487,6 +1514,8 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
         }
 
         [self registerObservers];
+
+        libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
 
         [self setDrawable:aDrawable];
     }

@@ -1,0 +1,153 @@
+From bb94af5168c928ec3ef78c8b89eb7f6768890e7e Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Thu, 9 Apr 2026 22:30:29 +0900
+Subject: [PATCH] feat: Add callback for libaribcaption
+
+---
+ include/vlc/libvlc_media_player.h   | 20 ++++++++++++++++++++
+ lib/libvlc.sym                      |  1 +
+ lib/media_player.c                  | 29 +++++++++++++++++++++++++++++
+ lib/media_player_internal.h         |  3 +++
+ modules/codec/arib/libaribcaption.c | 22 ++++++++++++++++++++++
+ 5 files changed, 75 insertions(+)
+
+diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+index 7e28aeda59..467ea6ce44 100644
+--- a/include/vlc/libvlc_media_player.h
++++ b/include/vlc/libvlc_media_player.h
+@@ -412,6 +412,13 @@ typedef void (*libvlc_video_unlock_cb)(void *opaque, void *picture,
+  */
+ typedef void (*libvlc_video_display_cb)(void *opaque, void *picture);
+ 
++/**
++ * Callback prototype to receive arib caption text
++ * \param[in] opaque private pointer passed to the libvlc_video_set_arib_text_callbacks()
++ * \param[in] psz_text caption text
++ */
++typedef void (*libvlc_video_arib_text_cb)(const char *psz_text, void *opaque);
++
+ /**
+  * Callback prototype to configure picture buffers format.
+  * This callback gets the format of the video as output by the video decoder
+@@ -500,6 +507,19 @@ void libvlc_video_set_callbacks( libvlc_media_player_t *mp,
+                                  libvlc_video_display_cb display,
+                                  void *opaque );
+ 
++/**
++ * Set callbacks to receive decoded ARIB caption text.
++ *
++ * \param mp the media player
++ * \param cb callback to report text (or NULL)
++ * \param opaque private pointer for the callback
++ */
++LIBVLC_API
++void libvlc_video_set_arib_text_callbacks( libvlc_media_player_t *mp,
++                                           libvlc_video_arib_text_cb cb,
++                                           void *opaque );
++
++
+ /**
+  * Set decoded video chroma and dimensions.
+  * This only works in combination with libvlc_video_set_callbacks(),
+diff --git a/lib/libvlc.sym b/lib/libvlc.sym
+index 5fd0216314..df1b6adfff 100644
+--- a/lib/libvlc.sym
++++ b/lib/libvlc.sym
+@@ -260,6 +260,7 @@ libvlc_video_set_adjust_float
+ libvlc_video_set_adjust_int
+ libvlc_video_set_aspect_ratio
+ libvlc_video_set_callbacks
++libvlc_video_set_arib_text_callbacks
+ libvlc_video_set_crop_ratio
+ libvlc_video_set_crop_window
+ libvlc_video_set_crop_border
+diff --git a/lib/media_player.c b/lib/media_player.c
+index a3c62b9381..9a9f524006 100644
+--- a/lib/media_player.c
++++ b/lib/media_player.c
+@@ -1093,6 +1093,35 @@ void libvlc_video_set_callbacks( libvlc_media_player_t *mp,
+     var_SetString( mp, "window", "dummy" );
+ }
+ 
++static int arib_text_var_cb(vlc_object_t *p_this, char const *psz_var,
++                              vlc_value_t oldval, vlc_value_t newval,
++                              void *p_data)
++{
++    VLC_UNUSED(p_this); VLC_UNUSED(psz_var); VLC_UNUSED(oldval);
++    fprintf(stderr, "arib_text_var_cb fired: %s\n", newval.psz_string ? newval.psz_string : "null");
++    libvlc_media_player_t *mp = p_data;
++    if (mp->arib_text_cb)
++        mp->arib_text_cb(newval.psz_string, mp->arib_text_opaque);
++    return VLC_SUCCESS;
++}
++
++void libvlc_video_set_arib_text_callbacks( libvlc_media_player_t *mp,
++                                           libvlc_video_arib_text_cb cb,
++                                           void *opaque )
++{
++    libvlc_instance_t *p_libvlc = mp->p_libvlc_instance;
++
++    fprintf(stderr, "libvlc_video_set_arib_text_callbacks: setting addresses on p_libvlc_int=%p\n", p_libvlc->p_libvlc_int);
++
++    if (var_Type(p_libvlc->p_libvlc_int, "arib-text-cb") == 0)
++        var_Create(p_libvlc->p_libvlc_int, "arib-text-cb", VLC_VAR_ADDRESS);
++    var_SetAddress(p_libvlc->p_libvlc_int, "arib-text-cb", (void*)cb);
++
++    if (var_Type(p_libvlc->p_libvlc_int, "arib-text-opaque") == 0)
++        var_Create(p_libvlc->p_libvlc_int, "arib-text-opaque", VLC_VAR_ADDRESS);
++    var_SetAddress(p_libvlc->p_libvlc_int, "arib-text-opaque", opaque);
++}
++
+ void libvlc_video_set_format_callbacks( libvlc_media_player_t *mp,
+                                         libvlc_video_format_cb setup,
+                                         libvlc_video_cleanup_cb cleanup )
+diff --git a/lib/media_player_internal.h b/lib/media_player_internal.h
+index 885b001ccc..d093999ed8 100644
+--- a/lib/media_player_internal.h
++++ b/lib/media_player_internal.h
+@@ -43,6 +43,9 @@ struct libvlc_media_player_t
+     vlc_player_aout_listener_id *aout_listener;
+     vlc_cond_t wait;
+ 
++    libvlc_video_arib_text_cb arib_text_cb;
++    void *arib_text_opaque;
++
+     struct libvlc_instance_t * p_libvlc_instance; /* Parent instance */
+     libvlc_media_t * p_md; /* current media descriptor */
+     libvlc_event_manager_t event_manager;
+diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
+index 774a225e1a..c7464d19b8 100644
+--- a/modules/codec/arib/libaribcaption.c
++++ b/modules/codec/arib/libaribcaption.c
+@@ -256,6 +256,28 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
+     vlc_mutex_lock(&p_sys->aribcc_lock);
+     aribcc_renderer_append_caption(p_sys->p_renderer, &caption);
+     vlc_mutex_unlock(&p_sys->aribcc_lock);
++
++    if (caption.text && *caption.text) {
++        vlc_object_t *obj = VLC_OBJECT(p_dec);
++        void (*cb)(const char*, void*) = NULL;
++        void *opaque = NULL;
++
++        while (obj != NULL) {
++            if (var_Type(obj, "arib-text-cb") != 0) {
++                cb = (void(*)(const char*, void*))var_GetAddress(obj, "arib-text-cb");
++                opaque = var_GetAddress(obj, "arib-text-opaque");
++                break;
++            }
++            obj = vlc_object_parent(obj);
++        }
++
++        if (cb) {
++            cb(caption.text, opaque);
++        } else {
++            fprintf(stderr, "libaribcaption decoded text: %s, BUT NO CALLBACK FOUND\n", caption.text);
++        }
++    }
++
+     aribcc_caption_cleanup(&caption);
+ 
+ 
+-- 
+2.39.1
+

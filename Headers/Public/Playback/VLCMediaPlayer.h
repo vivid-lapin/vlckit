@@ -196,6 +196,13 @@ NSString * VLCMediaPlayerStateToString(VLCMediaPlayerState state);
  */
 - (void)mediaPlayer:(VLCMediaPlayer *)player recordingStoppedAtURL:(nullable NSURL *)url;
 
+/**
+ * Called when the ARIB caption text is updated during playback.
+ * @param player the player representing the playback
+ * @param text the decoded caption text
+ */
+- (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateAribText:(NSString *)text;
+
 @end
 
 
@@ -213,6 +220,11 @@ OBJC_VISIBLE
  * the delegate object implementing the optional protocol
  */
 @property (weak, nonatomic, nullable) id<VLCMediaPlayerDelegate> delegate;
+
+/**
+ * the block executed when arib caption text is updated
+ */
+@property (nonatomic, copy, nullable) void (^aribTextUpdatedBlock)(NSString *text);
 
 #if !TARGET_OS_IPHONE
 /* Initializers */
