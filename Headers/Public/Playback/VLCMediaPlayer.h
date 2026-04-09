@@ -196,6 +196,16 @@ NSString * VLCMediaPlayerStateToString(VLCMediaPlayerState state);
  */
 - (void)mediaPlayer:(VLCMediaPlayer *)player recordingStoppedAtURL:(nullable NSURL *)url;
 
+/**
+ * Called when the ARIB caption text is updated during playback.
+ * When the subtitle changes (including clears), this is called on the main
+ * thread at the moment the subtitle becomes visible on screen.
+ * An empty string signals that the current subtitle has been cleared.
+ * @param player the player representing the playback
+ * @param text the decoded caption text, or an empty string when cleared
+ */
+- (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateAribText:(NSString *)text;
+
 @end
 
 
@@ -213,6 +223,13 @@ OBJC_VISIBLE
  * the delegate object implementing the optional protocol
  */
 @property (weak, nonatomic, nullable) id<VLCMediaPlayerDelegate> delegate;
+
+/**
+ * A block called when the ARIB caption text is updated during playback.
+ * Called on the main thread at the moment the subtitle becomes visible.
+ * An empty string signals that the current subtitle has been cleared.
+ */
+@property (nonatomic, copy, nullable) void (^aribTextUpdatedBlock)(NSString *text);
 
 #if !TARGET_OS_IPHONE
 /* Initializers */
@@ -271,7 +288,7 @@ OBJC_VISIBLE
 
 /**
  * set/retrieve a video view for rendering
- * This can be any 
+ * This can be any
  * - UIView or NSView
  * - NSObject conforming to VLCDrawable protocol
  * - VLCVideoView or VLCVideoLayer
