@@ -441,22 +441,17 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
     }
 }
 
-static void HandleMediaPlayerAribText(const char *text, void *opaque)
+static void HandleMediaPlayerAribText(const char *text, int64_t pts, void *opaque)
 {
     @autoreleasepool {
         NSString *aribText = text ? [NSString stringWithUTF8String:text] : nil;
-        NSLog(@"HandleMediaPlayerAribText received: %@", aribText);
-        // Since we are not using VLCEventsHandler, we need to dispatch manually to the main thread
-        // We could also use VLCEventsHandler if preferred.
         VLCMediaPlayer *player = (__bridge VLCMediaPlayer *)opaque;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (player.aribTextUpdatedBlock) {
-                player.aribTextUpdatedBlock(aribText);
+                player.aribTextUpdatedBlock(aribText, pts);
             }
-            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateAribText:)]) {
-                [player.delegate mediaPlayer:player didUpdateAribText:aribText];
-            } else {
-                NSLog(@"VLCMediaPlayer: delegate does not respond to mediaPlayer:didUpdateAribText:");
+            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateAribText:pts:)]) {
+                [player.delegate mediaPlayer:player didUpdateAribText:aribText pts:pts];
             }
         });
     }

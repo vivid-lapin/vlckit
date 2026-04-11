@@ -200,8 +200,9 @@ NSString * VLCMediaPlayerStateToString(VLCMediaPlayerState state);
  * Called when the ARIB caption text is updated during playback.
  * @param player the player representing the playback
  * @param text the decoded caption text
+ * @param pts the presentation time stamp in milliseconds when the text should be displayed
  */
-- (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateAribText:(NSString *)text;
+- (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateAribText:(NSString *)text pts:(int64_t)pts;
 
 @end
 
@@ -222,9 +223,10 @@ OBJC_VISIBLE
 @property (weak, nonatomic, nullable) id<VLCMediaPlayerDelegate> delegate;
 
 /**
- * the block executed when arib caption text is updated
+ * A block called when the ARIB caption text is updated during playback.
+ * The block receives the decoded text and the presentation time stamp (in milliseconds) as arguments.
  */
-@property (nonatomic, copy, nullable) void (^aribTextUpdatedBlock)(NSString *text);
+@property (nonatomic, copy) void (^aribTextUpdatedBlock)(NSString *text, int64_t pts);
 
 #if !TARGET_OS_IPHONE
 /* Initializers */
