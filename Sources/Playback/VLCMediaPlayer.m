@@ -267,7 +267,7 @@ static void HandleMediaPlayerTrackChanged(const libvlc_event_t *event, void *opa
         VLCMediaTrackType trackType = GetMediaTrackType(
             event->u.media_player_es_changed.i_type);
         libvlc_event_type_t event_type = event->type;
-        
+
         VLCEventsHandler *eventsHandler = (__bridge VLCEventsHandler*)opaque;
         [eventsHandler handleEvent:^(id _Nonnull object) {
             VLCMediaPlayer *mediaPlayer = (VLCMediaPlayer *)object;
@@ -419,12 +419,12 @@ static void HandleMediaPlayerSnapshot(const libvlc_event_t * event, void * opaqu
 static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 {
     @autoreleasepool {
-        
+
         BOOL isRecording = event->u.media_player_record_changed.recording;
-        
+
         const char *psz_file_path = event->u.media_player_record_changed.recorded_file_path;
         NSString *filePath = psz_file_path ? @(psz_file_path) : nil;
-        
+
         VLCEventsHandler *eventsHandler = (__bridge VLCEventsHandler*)opaque;
         [eventsHandler handleEvent:^(id _Nonnull object) {
             VLCMediaPlayer *mediaPlayer = (VLCMediaPlayer *)object;
@@ -444,7 +444,7 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
 static void HandleMediaPlayerAribText(const char *text, void *opaque)
 {
     @autoreleasepool {
-        NSString *aribText = text ? [NSString stringWithUTF8String:text] : nil;
+        NSString *aribText = @(text ?: "");
         VLCMediaPlayer *player = (__bridge VLCMediaPlayer *)opaque;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (player.aribTextUpdatedBlock) {
@@ -510,7 +510,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         }
 
         [self registerObservers];
-        
+
         libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
     }
     return self;
@@ -529,7 +529,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         _playerInstance = playerInstance;
 
         [self registerObservers];
-        
+
         libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
     }
     return self;
@@ -702,10 +702,10 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     char * result = libvlc_video_get_aspect_ratio(_playerInstance);
     if (!result)
         return nil;
-    
+
     NSString *aspectRatio = @(result);
     libvlc_free(result);
-    
+
     return aspectRatio;
 }
 
@@ -859,7 +859,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     if (lastTimePoint.position == 0. || lastTimePoint.ts_us == -1) {
         return [VLCTime nullTime];
     }
-    
+
     double remaining = ((lastInterpolatedTime / lastInterpolatedPosition) - lastInterpolatedTime) / 1000;
     return [VLCTime timeWithNumber:@(-remaining)];
 }
@@ -907,11 +907,11 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     VLCMediaPlayerTitleDescription *currentTitleDescription = [self currentTitleDescription];
     if (!currentTitleDescription)
         return nil;
-    
+
     for (VLCMediaPlayerChapterDescription *chapterDescription in currentTitleDescription.chapterDescriptions)
         if (chapterDescription.isCurrent)
             return chapterDescription;
-    
+
     return nil;
 }
 
@@ -958,7 +958,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     for (VLCMediaPlayerTitleDescription *titleDescription in titles)
         if (titleDescription.isCurrent)
             return titleDescription;
-        
+
     return nil;
 }
 
@@ -966,7 +966,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
 {
     libvlc_title_description_t **titles = NULL;
     const int count = libvlc_media_player_get_full_title_descriptions(_playerInstance, &titles);
-    
+
     // -1 on error
     if (count == -1)
         return @[];
@@ -974,26 +974,26 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         libvlc_title_descriptions_release(titles, count);
         return @[];
     }
-    
+
     NSMutableArray<VLCMediaPlayerTitleDescription *> *array = [NSMutableArray arrayWithCapacity: (NSUInteger)count];
     for (int i = 0; i < count; i++) {
         VLCMediaPlayerTitleDescription *titleDescription = [[VLCMediaPlayerTitleDescription alloc] initWithMediaPlayer: self titleDescription: titles[i] titleIndex: i];
         [array addObject: titleDescription];
     }
-    
+
     libvlc_title_descriptions_release(titles, count);
-    
+
     return array;
 }
 
 - (int)indexOfLongestTitle
 {
     NSArray<VLCMediaPlayerTitleDescription *> *titles = [self titleDescriptions];
-    
+
     int currentlyFoundTitle = 0;
     int64_t currentlySelectedDuration = 0;
     int64_t randomTitleDuration = 0;
-    
+
     for (VLCMediaPlayerTitleDescription *titleDescription in titles) {
         randomTitleDuration = titleDescription.durationTime.value.longLongValue;
         if (randomTitleDuration > currentlySelectedDuration) {
@@ -1001,7 +1001,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
             currentlyFoundTitle = titleDescription.titleIndex;
         }
     }
-    
+
     return currentlyFoundTitle;
 }
 
@@ -1019,7 +1019,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     for (VLCMediaPlayerTitleDescription *titleDescription in titles)
         if (titleDescription.titleIndex == titleIndex)
             return titleDescription.chapterDescriptions;
-    
+
     return @[];
 }
 
@@ -1063,9 +1063,9 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
 {
     if (_equalizer)
         [_equalizer setMediaPlayer: nil];
-    
+
     _equalizer = equalizer;
-    
+
     if (_equalizer)
         [_equalizer setMediaPlayer: self];
 }
@@ -1132,7 +1132,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
             isChangeValid = NO;
             return;
         }
-        
+
         int64_t system_now_us = _systemDateOfDiscontinuity > 0 ? _systemDateOfDiscontinuity : libvlc_clock();
 
         libvlc_media_player_time_point_interpolate(&_lastTimePoint,
@@ -1366,7 +1366,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     dispatch_sync(_timeChangeLockQueue, ^{
         position = _lastInterpolatedPosition;
     });
-    
+
     return position;
 }
 
@@ -1425,7 +1425,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
 {
     if (!_snapshots)
         return nil;
-    
+
     return [_snapshots copy];
 }
 
@@ -1501,7 +1501,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
             VKLog(@"creating player instance using shared library");
             _privateLibrary = [VLCLibrary sharedLibrary];
         }
-        
+
         _playerInstance = libvlc_media_player_new([_privateLibrary instance]);
         if (_playerInstance == NULL) {
             NSAssert(0, @"%s: player initialization failed", __PRETTY_FUNCTION__);
@@ -1627,7 +1627,7 @@ static const struct event_handler_entry
 {
     [self willChangeValueForKey:@"state"];
     _cachedState = newState;
-    
+
     if ([self isPlaying]) {
         [self startTimeChangeUpdateTimer];
 #if !TARGET_OS_IPHONE
@@ -1639,7 +1639,7 @@ static const struct event_handler_entry
         [self allowDisplaySleep];
 #endif
     }
-    
+
     [self didChangeValueForKey:@"state"];
 }
 
@@ -1755,18 +1755,18 @@ static const struct event_handler_entry
         [self deselectAllTextTracks];
         return;
     }
-    
+
     libvlc_media_player_t *p_mi = _playerInstance;
     if (!p_mi)
         return;
-    
+
     NSMutableArray<NSString *> *trackIds = [NSMutableArray arrayWithCapacity:tracks.count];
     for (VLCMediaPlayerTrack *track in tracks) {
         if (track.type == VLCMediaTrackTypeText) {
             [trackIds addObject:track.trackId];
         }
     }
-    
+
     if (trackIds.count > 0) {
         NSString *idsString = [trackIds componentsJoinedByString:@","];
         libvlc_media_player_select_tracks_by_ids(p_mi, libvlc_track_text, idsString.UTF8String);
@@ -1785,7 +1785,7 @@ static const struct event_handler_entry
     libvlc_media_tracklist_t *tracklist = libvlc_media_player_get_tracklist(_playerInstance, type, false);
     if (!tracklist)
         return @[];
-    
+
     const size_t tracklistCount = libvlc_media_tracklist_count(tracklist);
     NSMutableArray<VLCMediaPlayerTrack *> *tracks = [NSMutableArray arrayWithCapacity: (NSUInteger)tracklistCount];
     for (size_t i = 0; i < tracklistCount; i++) {
