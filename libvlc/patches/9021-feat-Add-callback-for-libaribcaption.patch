@@ -1,21 +1,21 @@
-From cfe6aa71fc46f2d3c4af60fcaf3cafb27e6a3287 Mon Sep 17 00:00:00 2001
+From 8eb84cb9910a69003bd0333ddce62ddf6afd5656 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 9 Apr 2026 22:30:29 +0900
 Subject: [PATCH] feat: Add callback for libaribcaption
 
 ---
- include/vlc/libvlc_media_player.h   | 22 ++++++++++++++++++++++
+ include/vlc/libvlc_media_player.h   | 21 +++++++++++++++++
  lib/libvlc.sym                      |  1 +
- lib/media_player.c                  | 17 +++++++++++++++++
+ lib/media_player.c                  | 17 ++++++++++++++
  lib/media_player_internal.h         |  3 +++
- modules/codec/arib/libaribcaption.c | 20 ++++++++++++++++++++
- 5 files changed, 63 insertions(+)
+ modules/codec/arib/libaribcaption.c | 35 +++++++++++++++++++++++++++--
+ 5 files changed, 75 insertions(+), 2 deletions(-)
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
-index 7e28aeda59..44ec13feb7 100644
+index 7e28aeda59..5bb597282c 100644
 --- a/include/vlc/libvlc_media_player.h
 +++ b/include/vlc/libvlc_media_player.h
-@@ -412,6 +412,15 @@ typedef void (*libvlc_video_unlock_cb)(void *opaque, void *picture,
+@@ -412,6 +412,14 @@ typedef void (*libvlc_video_unlock_cb)(void *opaque, void *picture,
   */
  typedef void (*libvlc_video_display_cb)(void *opaque, void *picture);
  
@@ -23,15 +23,14 @@ index 7e28aeda59..44ec13feb7 100644
 + * Callback prototype to report ARIB caption text.
 + *
 + * \param text decoded string
-+ * \param pts presentation time stamp in milliseconds
 + * \param opaque user data
 + */
-+typedef void (*libvlc_video_arib_text_cb)(const char *text, int64_t pts, void *opaque);
++typedef void (*libvlc_video_arib_text_cb)(const char *text, void *opaque);
 +
  /**
   * Callback prototype to configure picture buffers format.
   * This callback gets the format of the video as output by the video decoder
-@@ -500,6 +509,19 @@ void libvlc_video_set_callbacks( libvlc_media_player_t *mp,
+@@ -500,6 +508,19 @@ void libvlc_video_set_callbacks( libvlc_media_player_t *mp,
                                   libvlc_video_display_cb display,
                                   void *opaque );
  
@@ -106,36 +105,88 @@ index 885b001ccc..d093999ed8 100644
      libvlc_media_t * p_md; /* current media descriptor */
      libvlc_event_manager_t event_manager;
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 774a225e1a..f94571dd59 100644
+index 774a225e1a..dc23f42524 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
-@@ -256,6 +256,26 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
+@@ -64,6 +64,8 @@ typedef struct
+     decoder_sys_t         *p_dec_sys;
+     vlc_tick_t             i_pts;
+     aribcc_render_result_t render_result;
++    char                  *psz_text;
++    bool                   b_callback_called;
+ } libaribcaption_spu_updater_sys_t;
+ 
+ 
+@@ -117,6 +119,7 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+ {
+     libaribcaption_spu_updater_sys_t *p_spusys = p_subpic->updater.sys;
+     decoder_sys_t *p_sys = p_spusys->p_dec_sys;
++
+     const video_format_t *p_src_format = cfg->video_src;
+     const video_format_t *p_dst_format = cfg->video_dst;
+ 
+@@ -211,6 +214,30 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+         vlc_spu_regions_push(&p_subpic->regions, region);
+     }
+ 
++    if (p_spusys->psz_text && !p_spusys->b_callback_called) {
++        vlc_mutex_lock(&p_sys->dec_lock);
++        if (p_sys->p_dec) {
++            vlc_object_t *obj = VLC_OBJECT(p_sys->p_dec);
++            void (*cb)(const char*, void*) = NULL;
++            void *opaque = NULL;
++
++            while (obj != NULL) {
++                if (var_Type(obj, "arib-text-cb") != 0) {
++                    cb = (void(*)(const char*, void*))var_GetAddress(obj, "arib-text-cb");
++                    opaque = var_GetAddress(obj, "arib-text-opaque");
++                    break;
++                }
++                obj = vlc_object_parent(obj);
++            }
++
++            if (cb) {
++                cb(p_spusys->psz_text, opaque);
++            }
++        }
++        vlc_mutex_unlock(&p_sys->dec_lock);
++        p_spusys->b_callback_called = true;
++    }
++
+     aribcc_render_result_cleanup(&p_spusys->render_result);
+ }
+ 
+@@ -218,6 +245,7 @@ static void SubpictureDestroy(subpicture_t *p_subpic)
+ {
+     libaribcaption_spu_updater_sys_t *p_spusys = p_subpic->updater.sys;
+     DecSysRelease(p_spusys->p_dec_sys);
++    free(p_spusys->psz_text);
+     free(p_spusys);
+ }
+ 
+@@ -256,17 +284,20 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
      vlc_mutex_lock(&p_sys->aribcc_lock);
      aribcc_renderer_append_caption(p_sys->p_renderer, &caption);
      vlc_mutex_unlock(&p_sys->aribcc_lock);
-+
-+    if (caption.text && *caption.text) {
-+        vlc_object_t *obj = VLC_OBJECT(p_dec);
-+        void (*cb)(const char*, int64_t, void*) = NULL;
-+        void *opaque = NULL;
-+
-+        while (obj != NULL) {
-+            if (var_Type(obj, "arib-text-cb") != 0) {
-+                cb = (void(*)(const char*, int64_t, void*))var_GetAddress(obj, "arib-text-cb");
-+                opaque = var_GetAddress(obj, "arib-text-opaque");
-+                break;
-+            }
-+            obj = vlc_object_parent(obj);
-+        }
-+
-+        if (cb) {
-+            cb(caption.text, (int64_t)MS_FROM_VLC_TICK(p_block->i_pts), opaque);
-+        }
-+    }
-+
-     aribcc_caption_cleanup(&caption);
+-    aribcc_caption_cleanup(&caption);
+-
  
+     libaribcaption_spu_updater_sys_t *p_spusys = malloc(sizeof(libaribcaption_spu_updater_sys_t));
+     if (!p_spusys) {
++        aribcc_caption_cleanup(&caption);
+         block_Release(p_block);
+         return VLCDEC_SUCCESS;
+     }
+     p_spusys->p_dec_sys = p_sys;
+     p_spusys->i_pts = p_block->i_pts;
+     memset(&p_spusys->render_result, 0, sizeof(p_spusys->render_result));
++    p_spusys->psz_text = (caption.text && *caption.text) ? strdup(caption.text) : NULL;
++    p_spusys->b_callback_called = false;
++
++    aribcc_caption_cleanup(&caption);
  
+     static const struct vlc_spu_updater_ops spu_ops =
+     {
 -- 
 2.39.1
 

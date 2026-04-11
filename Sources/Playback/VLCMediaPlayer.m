@@ -441,17 +441,17 @@ static void HandleMediaPlayerRecord(const libvlc_event_t * event, void * opaque)
     }
 }
 
-static void HandleMediaPlayerAribText(const char *text, int64_t pts, void *opaque)
+static void HandleMediaPlayerAribText(const char *text, void *opaque)
 {
     @autoreleasepool {
         NSString *aribText = text ? [NSString stringWithUTF8String:text] : nil;
         VLCMediaPlayer *player = (__bridge VLCMediaPlayer *)opaque;
         dispatch_async(dispatch_get_main_queue(), ^{
             if (player.aribTextUpdatedBlock) {
-                player.aribTextUpdatedBlock(aribText, pts);
+                player.aribTextUpdatedBlock(aribText);
             }
-            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateAribText:pts:)]) {
-                [player.delegate mediaPlayer:player didUpdateAribText:aribText pts:pts];
+            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateAribText:)]) {
+                [player.delegate mediaPlayer:player didUpdateAribText:aribText];
             }
         });
     }
