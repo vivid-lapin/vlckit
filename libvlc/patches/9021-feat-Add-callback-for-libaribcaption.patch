@@ -1,4 +1,4 @@
-From 2135399685e0557c33ddc7643543aa9a21394c52 Mon Sep 17 00:00:00 2001
+From 071126085099f994743aa51d9e4c61de61c5afd0 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 9 Apr 2026 22:30:29 +0900
 Subject: [PATCH] feat: Add callback for libaribcaption
@@ -8,8 +8,8 @@ Subject: [PATCH] feat: Add callback for libaribcaption
  lib/libvlc.sym                      |  1 +
  lib/media_player.c                  | 17 +++++++++
  lib/media_player_internal.h         |  3 ++
- modules/codec/arib/libaribcaption.c | 55 +++++++++++++++++++++++++++--
- 5 files changed, 95 insertions(+), 2 deletions(-)
+ modules/codec/arib/libaribcaption.c | 56 +++++++++++++++++++++++++++--
+ 5 files changed, 96 insertions(+), 2 deletions(-)
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
 index 7e28aeda59..5bb597282c 100644
@@ -105,7 +105,7 @@ index 885b001ccc..d093999ed8 100644
      libvlc_media_t * p_md; /* current media descriptor */
      libvlc_event_manager_t event_manager;
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 774a225e1a..499574105c 100644
+index 774a225e1a..3c3cc30fa4 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
 @@ -64,6 +64,8 @@ typedef struct
@@ -117,7 +117,7 @@ index 774a225e1a..499574105c 100644
  } libaribcaption_spu_updater_sys_t;
  
  
-@@ -117,6 +119,34 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
+@@ -117,6 +119,35 @@ static void SubpictureUpdate(subpicture_t *p_subpic,
  {
      libaribcaption_spu_updater_sys_t *p_spusys = p_subpic->updater.sys;
      decoder_sys_t *p_sys = p_spusys->p_dec_sys;
@@ -125,6 +125,7 @@ index 774a225e1a..499574105c 100644
 +    if (!p_spusys->b_callback_called) {
 +        vlc_tick_t now = vlc_tick_now();
 +        if (now >= p_spusys->i_pts) {
++            msg_Info(p_sys->p_dec, "libaribcaption: callback called now=%" PRId64 ", pts=%" PRId64, now, p_spusys->i_pts);
 +            vlc_mutex_lock(&p_sys->dec_lock);
 +            if (p_sys->p_dec) {
 +                vlc_object_t *obj = VLC_OBJECT(p_sys->p_dec);
@@ -152,7 +153,7 @@ index 774a225e1a..499574105c 100644
      const video_format_t *p_src_format = cfg->video_src;
      const video_format_t *p_dst_format = cfg->video_dst;
  
-@@ -218,6 +248,7 @@ static void SubpictureDestroy(subpicture_t *p_subpic)
+@@ -218,6 +249,7 @@ static void SubpictureDestroy(subpicture_t *p_subpic)
  {
      libaribcaption_spu_updater_sys_t *p_spusys = p_subpic->updater.sys;
      DecSysRelease(p_spusys->p_dec_sys);
@@ -160,7 +161,7 @@ index 774a225e1a..499574105c 100644
      free(p_spusys);
  }
  
-@@ -256,17 +287,20 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
+@@ -256,17 +288,20 @@ static int Decode(decoder_t *p_dec, block_t *p_block)
      vlc_mutex_lock(&p_sys->aribcc_lock);
      aribcc_renderer_append_caption(p_sys->p_renderer, &caption);
      vlc_mutex_unlock(&p_sys->aribcc_lock);
@@ -183,7 +184,7 @@ index 774a225e1a..499574105c 100644
  
      static const struct vlc_spu_updater_ops spu_ops =
      {
-@@ -317,6 +351,23 @@ static void Flush(decoder_t *p_dec)
+@@ -317,6 +352,23 @@ static void Flush(decoder_t *p_dec)
      aribcc_decoder_flush(p_sys->p_decoder);
      aribcc_renderer_flush(p_sys->p_renderer);
      vlc_mutex_unlock(&p_sys->aribcc_lock);
