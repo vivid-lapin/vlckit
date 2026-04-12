@@ -1,4 +1,4 @@
-From 87a9ddb5e042888919ea4d3e3b3bbf5bfb5bb4f7 Mon Sep 17 00:00:00 2001
+From 1e94ecb20dbb65b1a40da19b50e887051d5c832b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 9 Apr 2026 22:30:29 +0900
 Subject: [PATCH] feat: Add callback for libaribcaption
@@ -105,7 +105,7 @@ index 885b001ccc..d093999ed8 100644
      libvlc_media_t * p_md; /* current media descriptor */
      libvlc_event_manager_t event_manager;
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 774a225e1a..478d889c70 100644
+index 774a225e1a..5745382ffb 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
 @@ -64,6 +64,8 @@ typedef struct
@@ -125,8 +125,8 @@ index 774a225e1a..478d889c70 100644
 +    if (!p_spusys->b_callback_called) {
 +        vlc_mutex_lock(&p_sys->dec_lock);
 +        if (p_sys->p_dec) {
-+            vlc_tick_t display_date = decoder_GetDisplayDate(p_sys->p_dec, p_spusys->i_pts);
 +            vlc_tick_t now = vlc_tick_now();
++            vlc_tick_t display_date = decoder_GetDisplayDate(p_sys->p_dec, now, p_spusys->i_pts);
 +            msg_Dbg(p_sys->p_dec, "libaribcaption: callback called now=" PRId64 ", display_date=" PRId64, now, display_date);
 +            if (display_date != VLC_TICK_INVALID && now >= display_date) {
 +                vlc_object_t *obj = VLC_OBJECT(p_sys->p_dec);
