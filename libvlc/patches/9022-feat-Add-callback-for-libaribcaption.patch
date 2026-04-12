@@ -1,4 +1,4 @@
-From 071126085099f994743aa51d9e4c61de61c5afd0 Mon Sep 17 00:00:00 2001
+From 87a9ddb5e042888919ea4d3e3b3bbf5bfb5bb4f7 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Thu, 9 Apr 2026 22:30:29 +0900
 Subject: [PATCH] feat: Add callback for libaribcaption
@@ -105,7 +105,7 @@ index 885b001ccc..d093999ed8 100644
      libvlc_media_t * p_md; /* current media descriptor */
      libvlc_event_manager_t event_manager;
 diff --git a/modules/codec/arib/libaribcaption.c b/modules/codec/arib/libaribcaption.c
-index 774a225e1a..3c3cc30fa4 100644
+index 774a225e1a..478d889c70 100644
 --- a/modules/codec/arib/libaribcaption.c
 +++ b/modules/codec/arib/libaribcaption.c
 @@ -64,6 +64,8 @@ typedef struct
@@ -123,31 +123,31 @@ index 774a225e1a..3c3cc30fa4 100644
      decoder_sys_t *p_sys = p_spusys->p_dec_sys;
 +
 +    if (!p_spusys->b_callback_called) {
-+        vlc_tick_t now = vlc_tick_now();
-+        if (now >= p_spusys->i_pts) {
-+            msg_Info(p_sys->p_dec, "libaribcaption: callback called now=%" PRId64 ", pts=%" PRId64, now, p_spusys->i_pts);
-+            vlc_mutex_lock(&p_sys->dec_lock);
-+            if (p_sys->p_dec) {
++        vlc_mutex_lock(&p_sys->dec_lock);
++        if (p_sys->p_dec) {
++            vlc_tick_t display_date = decoder_GetDisplayDate(p_sys->p_dec, p_spusys->i_pts);
++            vlc_tick_t now = vlc_tick_now();
++            msg_Dbg(p_sys->p_dec, "libaribcaption: callback called now=" PRId64 ", display_date=" PRId64, now, display_date);
++            if (display_date != VLC_TICK_INVALID && now >= display_date) {
 +                vlc_object_t *obj = VLC_OBJECT(p_sys->p_dec);
 +                void (*cb)(const char*, void*) = NULL;
 +                void *opaque = NULL;
 +
 +                while (obj != NULL) {
-+                if (var_Type(obj, "arib-text-cb") != 0) {
++                    if (var_Type(obj, "arib-text-cb") != 0) {
 +                        cb = (void(*)(const char*, void*))var_GetAddress(obj, "arib-text-cb");
 +                        opaque = var_GetAddress(obj, "arib-text-opaque");
 +                        break;
 +                    }
 +                    obj = vlc_object_parent(obj);
 +                }
-+
 +                if (cb) {
 +                    cb(p_spusys->psz_text, opaque);
 +                }
++                p_spusys->b_callback_called = true;
 +            }
-+            vlc_mutex_unlock(&p_sys->dec_lock);
-+            p_spusys->b_callback_called = true;
 +        }
++        vlc_mutex_unlock(&p_sys->dec_lock);
 +    }
 +
      const video_format_t *p_src_format = cfg->video_src;
