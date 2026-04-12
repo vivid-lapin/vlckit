@@ -1,4 +1,4 @@
-From 6f5f75ae0d38f12ae18ced531758047f14f6d3fd Mon Sep 17 00:00:00 2001
+From 42b674ec73d039a0e707885b19b6ffb24d25234b Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 12 Apr 2026 03:04:49 +0900
 Subject: [PATCH] bml
@@ -15,9 +15,9 @@ Subject: [PATCH] bml
  modules/demux/mpeg/ts.c           | 22 ++++++-
  modules/demux/mpeg/ts_arib.c      | 36 ++++++++++++
  modules/demux/mpeg/ts_arib.h      |  5 ++
- modules/demux/mpeg/ts_psi.c       | 21 ++++++-
+ modules/demux/mpeg/ts_psi.c       | 31 +++++++++-
  src/misc/fourcc_list.h            |  3 +
- 13 files changed, 260 insertions(+), 13 deletions(-)
+ 13 files changed, 269 insertions(+), 14 deletions(-)
  create mode 100644 modules/codec/arib/bml_dec.c
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
@@ -465,7 +465,7 @@ index 0a859adbec..128463255f 100644
 +
  #endif
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 7ef3dd8721..52cd40ec62 100644
+index 7ef3dd8721..618994225a 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -39,6 +39,7 @@
@@ -484,7 +484,7 @@ index 7ef3dd8721..52cd40ec62 100644
      es_format_t *fmt = &p_pes->p_es->fmt;
      switch( i_stream_type )
      {
-@@ -1602,6 +1604,20 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+@@ -1602,6 +1604,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
          es_format_Change( fmt, AUDIO_ES, VLC_CODEC_MP4A );
          fmt->i_original_fourcc = VLC_FOURCC('A','D','T','S');
          break;
@@ -492,9 +492,8 @@ index 7ef3dd8721..52cd40ec62 100644
 +        msg_Info( p_demux, "BML: found stream type 0x0D, standard is %d", p_sys->standard );
 +        if( p_sys->standard == TS_STANDARD_ARIB )
 +        {
-+            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D) as SPU_ES" );
-+            es_format_Change( fmt, SPU_ES, VLC_CODEC_ARIB_BML );
-+            fmt->i_priority = ES_PRIORITY_SELECTABLE_MIN + 1000;
++            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D) for persistent collection" );
++            es_format_Change( fmt, DATA_ES, VLC_CODEC_ARIB_BML );
 +            fmt->psz_description = strdup("ARIB BML Data");
 +            *p_datatype = TS_TRANSPORT_SECTIONS;
 +            ts_sections_processor_Add( p_demux, &p_pes->p_sections_proc, 0, 0,
@@ -505,7 +504,7 @@ index 7ef3dd8721..52cd40ec62 100644
      case 0x10:  /* MPEG4 (video) */
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MP4V );
          break;
-@@ -1687,7 +1703,9 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1687,7 +1702,9 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
  {
      demux_sys_t *p_sys = p_demux->p_sys;
      ts_transport_type_t type_change = TS_TRANSPORT_PES;
@@ -515,7 +514,7 @@ index 7ef3dd8721..52cd40ec62 100644
  
      p_pes->i_stream_type = p_dvbpsies->i_type;
  
-@@ -1729,7 +1747,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1729,7 +1746,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
          case 0x0b:
          case 0x0c:
          case 0x0d:
@@ -525,6 +524,24 @@ index 7ef3dd8721..52cd40ec62 100644
              break;
          /* All other private or reserved types */
          case 0x13: /* SL in sections */
+@@ -2222,7 +2240,16 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+ 
+     /* Decref or clean now unused es */
+     for( int i = 0; i < pid_to_decref.i_size; i++ )
+-        PIDRelease( p_demux, pid_to_decref.p_elems[i] );
++    {
++        ts_pid_t *p_old_pid = pid_to_decref.p_elems[i];
++        if( p_old_pid->type == TYPE_STREAM && p_old_pid->u.p_stream->p_es &&
++            p_old_pid->u.p_stream->p_es->fmt.i_codec == VLC_CODEC_ARIB_BML )
++        {
++            msg_Info( p_demux, "BML: preserving BML PID %d despite not being in PMT", p_old_pid->i_pid );
++            continue;
++        }
++        PIDRelease( p_demux, p_old_pid );
++    }
+     ARRAY_RESET( pid_to_decref );
+ 
+     if( !p_sys->b_trust_pcr )
 diff --git a/src/misc/fourcc_list.h b/src/misc/fourcc_list.h
 index 4d6cd0d414..0c46bc062a 100644
 --- a/src/misc/fourcc_list.h
