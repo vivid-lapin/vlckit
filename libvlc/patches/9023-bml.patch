@@ -1,4 +1,4 @@
-From 1c971f9bf00de007da217a757e8147d4b2933f6e Mon Sep 17 00:00:00 2001
+From 6f5f75ae0d38f12ae18ced531758047f14f6d3fd Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sun, 12 Apr 2026 03:04:49 +0900
 Subject: [PATCH] bml
@@ -12,12 +12,12 @@ Subject: [PATCH] bml
  modules/codec/Makefile.am         |  3 +
  modules/codec/arib/bml_dec.c      | 96 +++++++++++++++++++++++++++++++
  modules/demux/mpeg/sections.c     | 10 +++-
- modules/demux/mpeg/ts.c           |  7 ++-
- modules/demux/mpeg/ts_arib.c      | 30 ++++++++++
+ modules/demux/mpeg/ts.c           | 22 ++++++-
+ modules/demux/mpeg/ts_arib.c      | 36 ++++++++++++
  modules/demux/mpeg/ts_arib.h      |  5 ++
- modules/demux/mpeg/ts_psi.c       | 18 +++++-
+ modules/demux/mpeg/ts_psi.c       | 21 ++++++-
  src/misc/fourcc_list.h            |  3 +
- 13 files changed, 236 insertions(+), 13 deletions(-)
+ 13 files changed, 260 insertions(+), 13 deletions(-)
  create mode 100644 modules/codec/arib/bml_dec.c
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
@@ -353,10 +353,32 @@ index 23602e1438..692cbc3a3b 100644
      }
  }
 diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
-index 7b7b461f6e..c5455fd79d 100644
+index 7b7b461f6e..9b3857492c 100644
 --- a/modules/demux/mpeg/ts.c
 +++ b/modules/demux/mpeg/ts.c
-@@ -866,7 +866,10 @@ void UpdatePESFilters( demux_t *p_demux, bool b_all )
+@@ -682,6 +682,21 @@ static int Demux( demux_t *p_demux )
+                 p_sys->b_valid_scrambling = true;
+         }
+ 
++        if ( p_pid->type == TYPE_FREE )
++        {
++            static int free_count = 0;
++            if ( (p_pid->i_pid >= 1297 && p_pid->i_pid <= 1809) && free_count++ % 1000 == 0 )
++                msg_Info( p_demux, "BML: ghost packet arrived for PID %d", p_pid->i_pid );
++        }
++
++        if ( p_pid->type == TYPE_STREAM && p_pid->u.p_stream->p_es && p_pid->u.p_stream->p_es->fmt.i_codec == VLC_CODEC_ARIB_BML )
++        {
++            static int count = 0;
++            if (count++ % 100 == 0)
++                msg_Info( p_demux, "BML: packet arrived for BML PID %d, type %d, transport %d, scrambled %d",
++                         p_pid->i_pid, p_pid->type, p_pid->u.p_stream->transport, !!(p_pkt->i_flags & BLOCK_FLAG_SCRAMBLED) );
++        }
++
+         /* Drop duplicates and invalid (DOES NOT drop corrupted) */
+         p_pkt = ProcessTSPacket( p_demux, p_pid, p_pkt, &i_header );
+         if( !p_pkt )
+@@ -866,7 +881,10 @@ void UpdatePESFilters( demux_t *p_demux, bool b_all )
  
                  if( b_stream_selected )
                  {
@@ -368,7 +390,7 @@ index 7b7b461f6e..c5455fd79d 100644
                      espid->i_flags |= FLAG_FILTERED;
                  }
              }
-@@ -2732,6 +2735,8 @@ static bool GatherSectionsData( demux_t *p_demux, ts_pid_t *p_pid, block_t *p_pk
+@@ -2732,6 +2750,8 @@ static bool GatherSectionsData( demux_t *p_demux, ts_pid_t *p_pid, block_t *p_pk
  
      if( (p_pkt->i_flags & BLOCK_FLAG_SCRAMBLED) == 0 )
      {
@@ -378,7 +400,7 @@ index 7b7b461f6e..c5455fd79d 100644
          b_ret = true;
      }
 diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
-index 3f4f221262..07ffcba290 100644
+index 3f4f221262..f281240e8c 100644
 --- a/modules/demux/mpeg/ts_arib.c
 +++ b/modules/demux/mpeg/ts_arib.c
 @@ -28,6 +28,7 @@
@@ -389,7 +411,7 @@ index 3f4f221262..07ffcba290 100644
  
  /*
   * ARIB TR-B21
-@@ -656,3 +657,32 @@ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
+@@ -656,3 +657,38 @@ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
  
      return stream.ptr;
  }
@@ -402,25 +424,31 @@ index 3f4f221262..07ffcba290 100644
 +    VLC_UNUSED(p_payloaddata); VLC_UNUSED(i_payloaddata);
 +    ts_stream_t *p_pes = (ts_stream_t *) p_pes_cb_data;
 +
-+    if( unlikely(p_pes->p_es->fmt.i_codec != VLC_CODEC_ARIB_BML) )
++    if( unlikely(!p_pes->p_es || p_pes->p_es->fmt.i_codec != VLC_CODEC_ARIB_BML) )
 +        return;
 +
-+    msg_Info( p_demux, "BML: section callback called, size %zu", i_sectiondata );
++    msg_Info( p_demux, "BML: section callback triggered, size %zu", i_sectiondata );
 +
-+    ts_pmt_t *p_pmt = p_pes->p_es->p_program;
-+    vlc_tick_t i_date = p_pmt->pcr.i_current;
-+
-+    block_t *p_content = block_Alloc( i_sectiondata );
-+    if( unlikely(!p_content) )
-+        return;
-+
-+    memcpy( p_content->p_buffer, p_sectiondata, i_sectiondata );
-+    p_content->i_dts = p_content->i_pts = i_date;
-+
-+    if( p_pes->p_es->id )
-+        es_out_Send( p_demux->out, p_pes->p_es->id, p_content );
-+    else
-+        block_Release( p_content );
++    /* Notify LibVLC variable directly from demuxer */
++    vlc_object_t *obj = VLC_OBJECT(p_demux);
++    while (obj != NULL)
++    {
++        if (var_Type(obj, "bml-data") != 0)
++        {
++            block_t *p_block = block_Alloc( i_sectiondata );
++            if( likely(p_block) )
++            {
++                memcpy( p_block->p_buffer, p_sectiondata, i_sectiondata );
++                vlc_value_t val;
++                val.p_address = p_block;
++                var_SetChecked(obj, "bml-data", VLC_VAR_ADDRESS, val);
++                var_TriggerCallback(obj, "bml-data");
++                block_Release( p_block );
++            }
++            return;
++        }
++        obj = vlc_object_parent(obj);
++    }
 +}
 diff --git a/modules/demux/mpeg/ts_arib.h b/modules/demux/mpeg/ts_arib.h
 index 0a859adbec..128463255f 100644
@@ -437,7 +465,7 @@ index 0a859adbec..128463255f 100644
 +
  #endif
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 7ef3dd8721..82de6e6782 100644
+index 7ef3dd8721..52cd40ec62 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -39,6 +39,7 @@
@@ -456,7 +484,7 @@ index 7ef3dd8721..82de6e6782 100644
      es_format_t *fmt = &p_pes->p_es->fmt;
      switch( i_stream_type )
      {
-@@ -1602,6 +1604,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+@@ -1602,6 +1604,20 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
          es_format_Change( fmt, AUDIO_ES, VLC_CODEC_MP4A );
          fmt->i_original_fourcc = VLC_FOURCC('A','D','T','S');
          break;
@@ -464,9 +492,10 @@ index 7ef3dd8721..82de6e6782 100644
 +        msg_Info( p_demux, "BML: found stream type 0x0D, standard is %d", p_sys->standard );
 +        if( p_sys->standard == TS_STANDARD_ARIB )
 +        {
-+            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D)" );
++            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D) as SPU_ES" );
 +            es_format_Change( fmt, SPU_ES, VLC_CODEC_ARIB_BML );
 +            fmt->i_priority = ES_PRIORITY_SELECTABLE_MIN + 1000;
++            fmt->psz_description = strdup("ARIB BML Data");
 +            *p_datatype = TS_TRANSPORT_SECTIONS;
 +            ts_sections_processor_Add( p_demux, &p_pes->p_sections_proc, 0, 0,
 +                                       BML_Section_Callback, p_pes );
@@ -476,7 +505,17 @@ index 7ef3dd8721..82de6e6782 100644
      case 0x10:  /* MPEG4 (video) */
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MP4V );
          break;
-@@ -1729,7 +1744,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1687,7 +1703,9 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+ {
+     demux_sys_t *p_sys = p_demux->p_sys;
+     ts_transport_type_t type_change = TS_TRANSPORT_PES;
++    msg_Info( p_demux, "  * pid=%d type=0x%x", p_dvbpsies->i_pid, p_dvbpsies->i_type );
+     PIDFillFormat( p_demux, p_pes, p_dvbpsies->i_type, &type_change );
++    msg_Info( p_demux, "    => pid %d has fcc=%4.4s cat=%d transport=%d", p_dvbpsies->i_pid, (char *)&p_pes->p_es->fmt.i_codec, p_pes->p_es->fmt.i_cat, type_change );
+ 
+     p_pes->i_stream_type = p_dvbpsies->i_type;
+ 
+@@ -1729,7 +1747,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
          case 0x0b:
          case 0x0c:
          case 0x0d:
