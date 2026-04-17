@@ -1,0 +1,268 @@
+From 0555eb682f4816ce1dd086ab0e9bbe754abd9e63 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Fri, 17 Apr 2026 22:52:28 +0900
+Subject: [PATCH] feat: Add callback for arib bml
+
+---
+ include/vlc/libvlc_media_player.h | 21 ++++++++++++++++++++
+ include/vlc_fourcc.h              |  1 +
+ lib/libvlc.sym                    |  1 +
+ lib/media_player.c                | 15 +++++++++++++++
+ modules/demux/mpeg/ts_arib.c      | 32 +++++++++++++++++++++++++++++++
+ modules/demux/mpeg/ts_arib.h      |  5 +++++
+ modules/demux/mpeg/ts_pid.c       |  8 +++++++-
+ modules/demux/mpeg/ts_pid.h       |  3 ++-
+ modules/demux/mpeg/ts_psi.c       | 25 +++++++++++++++++++++++-
+ src/misc/fourcc_list.h            |  3 +++
+ 10 files changed, 111 insertions(+), 3 deletions(-)
+
+diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
+index 5bb597282cd..70d83faadd3 100644
+--- a/include/vlc/libvlc_media_player.h
++++ b/include/vlc/libvlc_media_player.h
+@@ -420,6 +420,15 @@ typedef void (*libvlc_video_display_cb)(void *opaque, void *picture);
+  */
+ typedef void (*libvlc_video_arib_text_cb)(const char *text, void *opaque);
+ 
++/**
++ * Callback prototype to report ARIB BML stream data.
++ *
++ * \param data pointer to the TS section data buffer
++ * \param size size of the data buffer in bytes
++ * \param opaque user data
++ */
++typedef void (*libvlc_bml_data_cb)(const uint8_t *data, size_t size, void *opaque);
++
+ /**
+  * Callback prototype to configure picture buffers format.
+  * This callback gets the format of the video as output by the video decoder
+@@ -520,6 +529,18 @@ void libvlc_video_set_arib_text_callbacks( libvlc_media_player_t *mp,
+                                            libvlc_video_arib_text_cb cb,
+                                            void *opaque );
+ 
++/**
++ * Set callbacks to receive ARIB BML stream data.
++ *
++ * \param mp the media player
++ * \param cb callback to report BML data (or NULL)
++ * \param opaque private pointer for the callback
++ */
++LIBVLC_API
++void libvlc_video_set_bml_callbacks( libvlc_media_player_t *mp,
++                                     libvlc_bml_data_cb cb,
++                                     void *opaque );
++
+ 
+ /**
+  * Set decoded video chroma and dimensions.
+diff --git a/include/vlc_fourcc.h b/include/vlc_fourcc.h
+index 8bab09f6789..20454268b11 100644
+--- a/include/vlc_fourcc.h
++++ b/include/vlc_fourcc.h
+@@ -667,6 +667,7 @@
+ #define VLC_CODEC_TX3G      VLC_FOURCC('t','x','3','g')
+ #define VLC_CODEC_ARIB_A    VLC_FOURCC('a','r','b','a')
+ #define VLC_CODEC_ARIB_C    VLC_FOURCC('a','r','b','c')
++#define VLC_CODEC_ARIB_BML  VLC_FOURCC('a','r','b','m')
+ /* Blu-ray Presentation Graphics */
+ #define VLC_CODEC_BD_PG     VLC_FOURCC('b','d','p','g')
+ #define VLC_CODEC_BD_TEXT   VLC_FOURCC('b','d','t','x')
+diff --git a/lib/libvlc.sym b/lib/libvlc.sym
+index df1b6adfffa..dba2cc2e1db 100644
+--- a/lib/libvlc.sym
++++ b/lib/libvlc.sym
+@@ -261,6 +261,7 @@ libvlc_video_set_adjust_int
+ libvlc_video_set_aspect_ratio
+ libvlc_video_set_callbacks
+ libvlc_video_set_arib_text_callbacks
++libvlc_video_set_bml_callbacks
+ libvlc_video_set_crop_ratio
+ libvlc_video_set_crop_window
+ libvlc_video_set_crop_border
+diff --git a/lib/media_player.c b/lib/media_player.c
+index 95f49836887..822751f18c4 100644
+--- a/lib/media_player.c
++++ b/lib/media_player.c
+@@ -1110,6 +1110,21 @@ void libvlc_video_set_arib_text_callbacks( libvlc_media_player_t *mp,
+     var_SetAddress(p_libvlc->p_libvlc_int, "arib-text-opaque", opaque);
+ }
+ 
++void libvlc_video_set_bml_callbacks( libvlc_media_player_t *mp,
++                                     libvlc_bml_data_cb cb,
++                                     void *opaque )
++{
++    libvlc_instance_t *p_libvlc = mp->p_libvlc_instance;
++
++    if (var_Type(p_libvlc->p_libvlc_int, "bml-data-cb") == 0)
++        var_Create(p_libvlc->p_libvlc_int, "bml-data-cb", VLC_VAR_ADDRESS);
++    var_SetAddress(p_libvlc->p_libvlc_int, "bml-data-cb", (void*)cb);
++
++    if (var_Type(p_libvlc->p_libvlc_int, "bml-data-opaque") == 0)
++        var_Create(p_libvlc->p_libvlc_int, "bml-data-opaque", VLC_VAR_ADDRESS);
++    var_SetAddress(p_libvlc->p_libvlc_int, "bml-data-opaque", opaque);
++}
++
+ void libvlc_video_set_format_callbacks( libvlc_media_player_t *mp,
+                                         libvlc_video_format_cb setup,
+                                         libvlc_video_cleanup_cb cleanup )
+diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
+index 3f4f2212625..ad31f698745 100644
+--- a/modules/demux/mpeg/ts_arib.c
++++ b/modules/demux/mpeg/ts_arib.c
+@@ -28,6 +28,7 @@
+ #include "ts.h"
+ 
+ #include "ts_arib.h"
++#include "ts_streams_private.h"
+ 
+ /*
+  * ARIB TR-B21
+@@ -656,3 +657,34 @@ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
+ 
+     return stream.ptr;
+ }
++
++void BML_Section_Callback( demux_t *p_demux,
++                           const uint8_t *p_sectiondata, size_t i_sectiondata,
++                           const uint8_t *p_payloaddata, size_t i_payloaddata,
++                           void *p_pes_cb_data )
++{
++    VLC_UNUSED(p_payloaddata); VLC_UNUSED(i_payloaddata);
++    ts_stream_t *p_pes = (ts_stream_t *) p_pes_cb_data;
++
++    if( unlikely(p_pes->p_es->fmt.i_codec != VLC_CODEC_ARIB_BML) )
++        return;
++
++    msg_Dbg( p_demux, "BML: section callback called, size %zu", i_sectiondata );
++
++    vlc_object_t *obj = VLC_OBJECT(p_demux);
++    void (*cb)(const uint8_t*, size_t, void*) = NULL;
++    void *opaque = NULL;
++
++    while (obj != NULL) {
++        if (var_Type(obj, "bml-data-cb") != 0) {
++            cb = (void(*)(const uint8_t*, size_t, void*))var_GetAddress(obj, "bml-data-cb");
++            opaque = var_GetAddress(obj, "bml-data-opaque");
++            break;
++        }
++        obj = vlc_object_parent(obj);
++    }
++
++    if (cb) {
++        cb(p_sectiondata, i_sectiondata, opaque);
++    }
++}
+diff --git a/modules/demux/mpeg/ts_arib.h b/modules/demux/mpeg/ts_arib.h
+index 0a859adbec4..128463255f9 100644
+--- a/modules/demux/mpeg/ts_arib.h
++++ b/modules/demux/mpeg/ts_arib.h
+@@ -53,4 +53,9 @@ bool ts_arib_inject_png_palette( const uint8_t *p_in, size_t i_in,
+ 
+ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in );
+ 
++void BML_Section_Callback( demux_t *p_demux,
++                           const uint8_t *p_sectiondata, size_t i_sectiondata,
++                           const uint8_t *p_payloaddata, size_t i_payloaddata,
++                           void *p_pes_cb_data );
++
+ #endif
+diff --git a/modules/demux/mpeg/ts_pid.c b/modules/demux/mpeg/ts_pid.c
+index be9cfaa49fb..f4671a93236 100644
+--- a/modules/demux/mpeg/ts_pid.c
++++ b/modules/demux/mpeg/ts_pid.c
+@@ -260,7 +260,13 @@ void PIDRelease( demux_t *p_demux, ts_pid_t *pid )
+         assert( pid->type == TYPE_FREE );
+         return;
+     }
+-    else if( pid->i_refcount == 1 )
++    if ( pid->i_flags & FLAG_BML_STICKY )
++    {
++        msg_Info( p_demux, "BML: PIDRelease called for sticky PID %d, ignoring", pid->i_pid );
++        return;
++    }
++
++    if( pid->i_refcount == 1 )
+     {
+         pid->i_refcount--;
+     }
+diff --git a/modules/demux/mpeg/ts_pid.h b/modules/demux/mpeg/ts_pid.h
+index af68c98308d..79aac47efc3 100644
+--- a/modules/demux/mpeg/ts_pid.h
++++ b/modules/demux/mpeg/ts_pid.h
+@@ -44,7 +44,8 @@ enum
+     FLAGS_NONE = 0,
+     FLAG_SEEN  = 1,
+     FLAG_SCRAMBLED = 2,
+-    FLAG_FILTERED = 4
++    FLAG_FILTERED = 4,
++    FLAG_BML_STICKY = 8
+ };
+ 
+ #define SEEN(x) ((x)->i_flags & FLAG_SEEN)
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index 7ef3dd87211..40b652d24b9 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -1590,6 +1590,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+         es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
+         fmt->i_original_fourcc = VLC_CODEC_MP1V;
+         break;
++    case 0x0D: /* DSM-CC sections (ARIB BML) */
++        msg_Info( p_demux, "BML: found stream type 0x0D, standard is %d", p_sys->standard );
++        if( p_sys->standard == TS_STANDARD_ARIB )
++        {
++            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D)" );
++            es_format_Change( fmt, SPU_ES, VLC_CODEC_ARIB_BML );
++            fmt->i_priority = ES_PRIORITY_SELECTABLE_MIN + 1000;
++            *p_datatype = TS_TRANSPORT_SECTIONS;
++            ts_sections_processor_Add( p_demux, &p_pes->p_sections_proc, 0, 0,
++                                       BML_Section_Callback, p_pes );
++            p_pes->b_always_receive = true;
++        }
++        break;
+     case 0x02:  /* MPEG-2 video */
+     case 0x80:  /* MPEG-2 MOTO video */
+         es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
+@@ -1691,6 +1704,15 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+ 
+     p_pes->i_stream_type = p_dvbpsies->i_type;
+ 
++    if ( p_pes->p_es->fmt.i_codec == VLC_CODEC_ARIB_BML )
++    {
++        ts_pid_t *pespid = GetPID(p_sys, p_dvbpsies->i_pid);
++        pespid->i_flags |= FLAG_BML_STICKY;
++        /* Ensure the callback is on the stream object */
++        ts_sections_processor_Add( p_demux, &pespid->u.p_stream->p_sections_proc, 0, 0,
++                                   BML_Section_Callback, pespid->u.p_stream );
++    }
++
+     bool b_registration_applied = false;
+     if ( p_dvbpsies->i_type >= 0x80 ) /* non standard, extensions */
+     {
+@@ -1729,7 +1751,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+         case 0x0b:
+         case 0x0c:
+         case 0x0d:
+-            p_pes->transport = TS_TRANSPORT_IGNORE;
++            if( p_sys->standard != TS_STANDARD_ARIB )
++                p_pes->transport = TS_TRANSPORT_IGNORE;
+             break;
+         /* All other private or reserved types */
+         case 0x13: /* SL in sections */
+diff --git a/src/misc/fourcc_list.h b/src/misc/fourcc_list.h
+index 4d6cd0d414d..ff187a5bbca 100644
+--- a/src/misc/fourcc_list.h
++++ b/src/misc/fourcc_list.h
+@@ -1804,6 +1804,9 @@ static const staticentry_t p_list_spu[] = {
+     B(VLC_CODEC_ARIB_C, "ARIB subtitles (C-profile)"),
+         A("arbc"),
+ 
++    B(VLC_CODEC_ARIB_BML, "ARIB BML (Data Broadcasting)"),
++        A("arbm"),
++
+     B(VLC_CODEC_BD_PG, "BD PGS subtitles"),
+         A("bdpg"),
+ 
+-- 
+2.50.1 (Apple Git-155)
+

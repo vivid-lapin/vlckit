@@ -206,6 +206,15 @@ NSString * VLCMediaPlayerStateToString(VLCMediaPlayerState state);
  */
 - (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateAribText:(NSString *)text;
 
+/**
+ * Called when the ARIB BML data is updated during playback.
+ * This is called on the main thread when raw BML section data is extracted
+ * from the TS stream.
+ * @param player the player representing the playback
+ * @param data the raw BML section data as NSData
+ */
+- (void)mediaPlayer:(VLCMediaPlayer *)player didUpdateBmlData:(NSData *)data;
+
 @end
 
 
@@ -230,6 +239,12 @@ OBJC_VISIBLE
  * An empty string signals that the current subtitle has been cleared.
  */
 @property (nonatomic, copy, nullable) void (^aribTextUpdatedBlock)(NSString *text);
+
+/**
+ * A block called when ARIB BML data is updated during playback.
+ * Called on the main thread with raw BML section data.
+ */
+@property (nonatomic, copy, nullable) void (^bmlDataUpdatedBlock)(NSData *data);
 
 #if !TARGET_OS_IPHONE
 /* Initializers */
