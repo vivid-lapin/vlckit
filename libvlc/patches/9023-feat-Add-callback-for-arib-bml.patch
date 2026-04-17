@@ -1,4 +1,4 @@
-From 1e62f6cc52448b3b4dfffb9a5f668be48cdd63fa Mon Sep 17 00:00:00 2001
+From 9b31fd7ee7938935feee212450a7a43202e22b49 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 17 Apr 2026 22:52:28 +0900
 Subject: [PATCH] feat: Add callback for arib bml
@@ -12,9 +12,9 @@ Subject: [PATCH] feat: Add callback for arib bml
  modules/demux/mpeg/ts_arib.h      |  5 +++++
  modules/demux/mpeg/ts_pid.c       |  8 +++++++-
  modules/demux/mpeg/ts_pid.h       |  3 ++-
- modules/demux/mpeg/ts_psi.c       | 26 ++++++++++++++++++++++++-
+ modules/demux/mpeg/ts_psi.c       | 27 +++++++++++++++++++++++++-
  src/misc/fourcc_list.h            |  3 +++
- 10 files changed, 112 insertions(+), 3 deletions(-)
+ 10 files changed, 113 insertions(+), 3 deletions(-)
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
 index 5bb597282cd..70d83faadd3 100644
@@ -200,7 +200,7 @@ index af68c98308d..79aac47efc3 100644
  
  #define SEEN(x) ((x)->i_flags & FLAG_SEEN)
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 7ef3dd87211..0607c75b931 100644
+index 7ef3dd87211..7bbe2071d96 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -39,6 +39,7 @@
@@ -211,7 +211,15 @@ index 7ef3dd87211..0607c75b931 100644
  #include "ts_streams_private.h"
  #include "ts.h"
  
-@@ -1590,6 +1591,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+@@ -1583,6 +1584,7 @@ static bool PMTSetupEsRegistration( demux_t *p_demux, ts_es_t *p_es,
+ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+                            int i_stream_type, ts_transport_type_t *p_datatype )
+ {
++    demux_sys_t *p_sys = p_demux->p_sys;
+     es_format_t *fmt = &p_pes->p_es->fmt;
+     switch( i_stream_type )
+     {
+@@ -1590,6 +1592,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
          fmt->i_original_fourcc = VLC_CODEC_MP1V;
          break;
@@ -231,7 +239,7 @@ index 7ef3dd87211..0607c75b931 100644
      case 0x02:  /* MPEG-2 video */
      case 0x80:  /* MPEG-2 MOTO video */
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
-@@ -1691,6 +1705,15 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1691,6 +1706,15 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
  
      p_pes->i_stream_type = p_dvbpsies->i_type;
  
@@ -247,7 +255,7 @@ index 7ef3dd87211..0607c75b931 100644
      bool b_registration_applied = false;
      if ( p_dvbpsies->i_type >= 0x80 ) /* non standard, extensions */
      {
-@@ -1729,7 +1752,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1729,7 +1753,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
          case 0x0b:
          case 0x0c:
          case 0x0d:
