@@ -1,20 +1,22 @@
-From 9b31fd7ee7938935feee212450a7a43202e22b49 Mon Sep 17 00:00:00 2001
+From 9821c9f218d6cf6d1a0282f0e497f49c93e100c5 Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 17 Apr 2026 22:52:28 +0900
 Subject: [PATCH] feat: Add callback for arib bml
 
+fix: Fix BML section callback - ensure transport/sections_proc on active stream, add diagnostics
 ---
- include/vlc/libvlc_media_player.h | 21 ++++++++++++++++++++
+ include/vlc/libvlc_media_player.h | 21 +++++++++++++++++++
  include/vlc_fourcc.h              |  1 +
  lib/libvlc.sym                    |  1 +
- lib/media_player.c                | 15 +++++++++++++++
- modules/demux/mpeg/ts_arib.c      | 32 +++++++++++++++++++++++++++++++
+ lib/media_player.c                | 15 +++++++++++++
+ modules/demux/mpeg/ts.c           |  8 ++++++-
+ modules/demux/mpeg/ts_arib.c      | 35 +++++++++++++++++++++++++++++++
  modules/demux/mpeg/ts_arib.h      |  5 +++++
- modules/demux/mpeg/ts_pid.c       |  8 +++++++-
+ modules/demux/mpeg/ts_pid.c       |  8 ++++++-
  modules/demux/mpeg/ts_pid.h       |  3 ++-
- modules/demux/mpeg/ts_psi.c       | 27 +++++++++++++++++++++++++-
+ modules/demux/mpeg/ts_psi.c       | 34 +++++++++++++++++++++++++++++-
  src/misc/fourcc_list.h            |  3 +++
- 10 files changed, 113 insertions(+), 3 deletions(-)
+ 11 files changed, 130 insertions(+), 4 deletions(-)
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
 index 5bb597282cd..70d83faadd3 100644
@@ -105,8 +107,29 @@ index 95f49836887..822751f18c4 100644
  void libvlc_video_set_format_callbacks( libvlc_media_player_t *mp,
                                          libvlc_video_format_cb setup,
                                          libvlc_video_cleanup_cb cleanup )
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 7b7b461f6eb..cc386bc9604 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -2722,9 +2722,15 @@ static bool GatherPESData( demux_t *p_demux, ts_pid_t *p_pid, block_t *p_pkt, si
+ 
+ static bool GatherSectionsData( demux_t *p_demux, ts_pid_t *p_pid, block_t *p_pkt, size_t i_skip )
+ {
+-    VLC_UNUSED(i_skip); VLC_UNUSED(p_demux);
++    VLC_UNUSED(i_skip);
+     bool b_ret = false;
+ 
++    if( p_pid->u.p_stream->p_es->fmt.i_codec == VLC_FOURCC('a','r','b','m') )
++        msg_Info( p_demux, "BML: GatherSectionsData pid=%d proc=%p scrambled=%d",
++                  p_pid->i_pid,
++                  (void*)p_pid->u.p_stream->p_sections_proc,
++                  !!(p_pkt->i_flags & BLOCK_FLAG_SCRAMBLED) );
++
+     if( p_pkt->i_flags & BLOCK_FLAG_DISCONTINUITY )
+     {
+         ts_sections_processor_Reset( p_pid->u.p_stream->p_sections_proc );
 diff --git a/modules/demux/mpeg/ts_arib.c b/modules/demux/mpeg/ts_arib.c
-index 3f4f2212625..ad31f698745 100644
+index 3f4f2212625..ee14c5f5853 100644
 --- a/modules/demux/mpeg/ts_arib.c
 +++ b/modules/demux/mpeg/ts_arib.c
 @@ -28,6 +28,7 @@
@@ -117,7 +140,7 @@ index 3f4f2212625..ad31f698745 100644
  
  /*
   * ARIB TR-B21
-@@ -656,3 +657,34 @@ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
+@@ -656,3 +657,37 @@ char * ts_arib_Decode( const uint8_t *p_in, size_t i_in )
  
      return stream.ptr;
  }
@@ -131,9 +154,12 @@ index 3f4f2212625..ad31f698745 100644
 +    ts_stream_t *p_pes = (ts_stream_t *) p_pes_cb_data;
 +
 +    if( unlikely(p_pes->p_es->fmt.i_codec != VLC_CODEC_ARIB_BML) )
++    {
++        msg_Info( p_demux, "BML: section callback: unexpected codec %4.4s, ignoring", (char*)&p_pes->p_es->fmt.i_codec );
 +        return;
++    }
 +
-+    msg_Dbg( p_demux, "BML: section callback called, size %zu", i_sectiondata );
++    msg_Info( p_demux, "BML: section callback called, size %zu", i_sectiondata );
 +
 +    vlc_object_t *obj = VLC_OBJECT(p_demux);
 +    void (*cb)(const uint8_t*, size_t, void*) = NULL;
@@ -200,7 +226,7 @@ index af68c98308d..79aac47efc3 100644
  
  #define SEEN(x) ((x)->i_flags & FLAG_SEEN)
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 7ef3dd87211..7bbe2071d96 100644
+index 7ef3dd87211..7f3f221e02b 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -39,6 +39,7 @@
@@ -239,7 +265,7 @@ index 7ef3dd87211..7bbe2071d96 100644
      case 0x02:  /* MPEG-2 video */
      case 0x80:  /* MPEG-2 MOTO video */
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
-@@ -1691,6 +1706,15 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1691,6 +1706,22 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
  
      p_pes->i_stream_type = p_dvbpsies->i_type;
  
@@ -247,15 +273,22 @@ index 7ef3dd87211..7bbe2071d96 100644
 +    {
 +        ts_pid_t *pespid = GetPID(p_sys, p_dvbpsies->i_pid);
 +        pespid->i_flags |= FLAG_BML_STICKY;
-+        /* Ensure the callback is on the stream object */
-+        ts_sections_processor_Add( p_demux, &pespid->u.p_stream->p_sections_proc, 0, 0,
-+                                   BML_Section_Callback, pespid->u.p_stream );
++        /* Ensure transport and sections callback are set on the actual active stream */
++        ts_stream_t *p_active = pespid->u.p_stream;
++        msg_Info( p_demux, "BML: FillPES – pid %d, p_active sections_proc=%p, transport=%d",
++                  p_dvbpsies->i_pid, (void*)p_active->p_sections_proc, (int)p_active->transport );
++        p_active->transport = TS_TRANSPORT_SECTIONS;
++        p_active->b_always_receive = true;
++        ts_sections_processor_Add( p_demux, &p_active->p_sections_proc, 0, 0,
++                                   BML_Section_Callback, p_active );
++        msg_Info( p_demux, "BML: FillPES – after add: sections_proc=%p",
++                  (void*)p_active->p_sections_proc );
 +    }
 +
      bool b_registration_applied = false;
      if ( p_dvbpsies->i_type >= 0x80 ) /* non standard, extensions */
      {
-@@ -1729,7 +1753,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1729,7 +1760,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
          case 0x0b:
          case 0x0c:
          case 0x0d:
