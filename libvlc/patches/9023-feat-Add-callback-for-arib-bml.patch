@@ -1,7 +1,7 @@
 From 8b4f0983ce2264bd71425f20c9bae73d70ffdfed Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 17 Apr 2026 22:52:28 +0900
-Subject: [PATCH] feat: Add callback for arib bml
+Subject: [PATCH 1/2] feat: Add callback for arib bml
 
 fix: Fix BML section callback - ensure transport/sections_proc on active stream, add diagnostics
 
@@ -319,6 +319,82 @@ index 4d6cd0d414d..ff187a5bbca 100644
      B(VLC_CODEC_BD_PG, "BD PGS subtitles"),
          A("bdpg"),
  
+-- 
+2.39.1
+
+
+From 0a290ef8dd0193e2378dc87b359b76b4dd2b979e Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sat, 18 Apr 2026 12:50:31 +0900
+Subject: [PATCH 2/2] debug: BML - add more diagnostics and fix sections loop
+ bug
+
+---
+ modules/demux/mpeg/sections.c |  2 +-
+ modules/demux/mpeg/ts.c       | 20 ++++++++++++++++----
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/modules/demux/mpeg/sections.c b/modules/demux/mpeg/sections.c
+index 23602e1438c..f2e30c6efbe 100644
+--- a/modules/demux/mpeg/sections.c
++++ b/modules/demux/mpeg/sections.c
+@@ -144,6 +144,6 @@ void ts_sections_processor_Push( ts_sections_processor_t *p_chain,
+     for( ts_sections_processor_t *p_proc = p_chain;
+          p_proc; p_proc = p_proc->p_next )
+     {
+-        dvbpsi_packet_push( p_chain->p_dvbpsi, (uint8_t *) p_buf );
++        dvbpsi_packet_push( p_proc->p_dvbpsi, (uint8_t *) p_buf );
+     }
+ }
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index cc386bc9604..a885148645e 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -739,6 +739,8 @@ static int Demux( demux_t *p_demux )
+             }
+             else if( p_pid->u.p_stream->transport == TS_TRANSPORT_SECTIONS )
+             {
++                if ( p_pid->i_pid == 320 || p_pid->i_pid == 352 ) /* Typical BML PIDs */
++                    msg_Info( p_demux, "BML: Calling GatherSectionsData for pid %d", p_pid->i_pid );
+                 b_frame = GatherSectionsData( p_demux, p_pid, p_pkt, i_header );
+             }
+             else // pid->u.p_pes->transport == TS_TRANSPORT_IGNORE
+@@ -866,9 +868,18 @@ void UpdatePESFilters( demux_t *p_demux, bool b_all )
+ 
+                 if( b_stream_selected )
+                 {
+-                    msg_Dbg( p_demux, "enabling pid %d from program %d", espid->i_pid, p_pmt->i_number );
++                    if ( p_pes->transport == TS_TRANSPORT_SECTIONS )
++                        msg_Info( p_demux, "BML: re-enabling filtered flag for pid %d (always_receive=%d)", 
++                                  espid->i_pid, p_pes->b_always_receive );
++                    else
++                        msg_Dbg( p_demux, "enabling pid %d from program %d", espid->i_pid, p_pmt->i_number );
+                     espid->i_flags |= FLAG_FILTERED;
+                 }
++                else if ( p_pes->transport == TS_TRANSPORT_SECTIONS )
++                {
++                     msg_Info( p_demux, "BML: PID %d NOT re-enabled (always_receive=%d)", 
++                               espid->i_pid, p_pes->b_always_receive );
++                }
+             }
+ 
+             /* Select pcr last in case it is handled by unselected ES */
+@@ -2725,11 +2736,12 @@ static bool GatherSectionsData( demux_t *p_demux, ts_pid_t *p_pid, block_t *p_pk
+     VLC_UNUSED(i_skip);
+     bool b_ret = false;
+ 
+-    if( p_pid->u.p_stream->p_es->fmt.i_codec == VLC_FOURCC('a','r','b','m') )
+-        msg_Info( p_demux, "BML: GatherSectionsData pid=%d proc=%p scrambled=%d",
++    if( p_pid->u.p_stream->transport == TS_TRANSPORT_SECTIONS )
++        msg_Info( p_demux, "BML: GatherSectionsData pid=%d proc=%p scrambled=%d pusi=%d",
+                   p_pid->i_pid,
+                   (void*)p_pid->u.p_stream->p_sections_proc,
+-                  !!(p_pkt->i_flags & BLOCK_FLAG_SCRAMBLED) );
++                  !!(p_pkt->i_flags & BLOCK_FLAG_SCRAMBLED),
++                  !!(p_pkt->p_buffer[1] & 0x40) );
+ 
+     if( p_pkt->i_flags & BLOCK_FLAG_DISCONTINUITY )
+     {
 -- 
 2.39.1
 
