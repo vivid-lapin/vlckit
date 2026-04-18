@@ -457,6 +457,22 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
     }
 }
 
+static void HandleMediaPlayerBmlData(const uint8_t *data, size_t size, void *opaque)
+{
+    @autoreleasepool {
+        NSData *bmlData = [NSData dataWithBytes:data length:size];
+        VLCMediaPlayer *player = (__bridge VLCMediaPlayer *)opaque;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (player.bmlDataUpdatedBlock) {
+                player.bmlDataUpdatedBlock(bmlData);
+            }
+            if ([player.delegate respondsToSelector:@selector(mediaPlayer:didUpdateBmlData:)]) {
+                [player.delegate mediaPlayer:player didUpdateBmlData:bmlData];
+            }
+        });
+    }
+}
+
 @implementation VLCMediaPlayer
 @synthesize libraryInstance = _privateLibrary;
 
@@ -512,6 +528,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         [self registerObservers];
 
         libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
+        libvlc_video_set_bml_callbacks(_playerInstance, HandleMediaPlayerBmlData, (__bridge void *)self);
     }
     return self;
 
@@ -531,6 +548,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         [self registerObservers];
 
         libvlc_video_set_arib_text_callbacks(_playerInstance, HandleMediaPlayerAribText, (__bridge void *)self);
+        libvlc_video_set_bml_callbacks(_playerInstance, HandleMediaPlayerBmlData, (__bridge void *)self);
     }
     return self;
 }
@@ -585,6 +603,7 @@ static void HandleMediaPlayerAribText(const char *text, void *opaque)
         libvlc_free(_viewpoint);
 
     libvlc_video_set_arib_text_callbacks(_playerInstance, NULL, NULL);
+    libvlc_video_set_bml_callbacks(_playerInstance, NULL, NULL);
 
     libvlc_media_player_release(_playerInstance);
 }
