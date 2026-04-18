@@ -1,22 +1,24 @@
-From 9821c9f218d6cf6d1a0282f0e497f49c93e100c5 Mon Sep 17 00:00:00 2001
+From 8b4f0983ce2264bd71425f20c9bae73d70ffdfed Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 17 Apr 2026 22:52:28 +0900
 Subject: [PATCH] feat: Add callback for arib bml
 
 fix: Fix BML section callback - ensure transport/sections_proc on active stream, add diagnostics
+
+fix: BML - use UNKNOWN_ES to prevent decoder, force FLAG_FILTERED via SetPIDFilter
 ---
- include/vlc/libvlc_media_player.h | 21 +++++++++++++++++++
+ include/vlc/libvlc_media_player.h | 21 +++++++++++++++++
  include/vlc_fourcc.h              |  1 +
  lib/libvlc.sym                    |  1 +
- lib/media_player.c                | 15 +++++++++++++
+ lib/media_player.c                | 15 ++++++++++++
  modules/demux/mpeg/ts.c           |  8 ++++++-
- modules/demux/mpeg/ts_arib.c      | 35 +++++++++++++++++++++++++++++++
- modules/demux/mpeg/ts_arib.h      |  5 +++++
+ modules/demux/mpeg/ts_arib.c      | 35 +++++++++++++++++++++++++++
+ modules/demux/mpeg/ts_arib.h      |  5 ++++
  modules/demux/mpeg/ts_pid.c       |  8 ++++++-
  modules/demux/mpeg/ts_pid.h       |  3 ++-
- modules/demux/mpeg/ts_psi.c       | 34 +++++++++++++++++++++++++++++-
+ modules/demux/mpeg/ts_psi.c       | 39 ++++++++++++++++++++++++++++++-
  src/misc/fourcc_list.h            |  3 +++
- 11 files changed, 130 insertions(+), 4 deletions(-)
+ 11 files changed, 135 insertions(+), 4 deletions(-)
 
 diff --git a/include/vlc/libvlc_media_player.h b/include/vlc/libvlc_media_player.h
 index 5bb597282cd..70d83faadd3 100644
@@ -226,7 +228,7 @@ index af68c98308d..79aac47efc3 100644
  
  #define SEEN(x) ((x)->i_flags & FLAG_SEEN)
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 7ef3dd87211..7f3f221e02b 100644
+index 7ef3dd87211..d1557a23a29 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -39,6 +39,7 @@
@@ -245,7 +247,7 @@ index 7ef3dd87211..7f3f221e02b 100644
      es_format_t *fmt = &p_pes->p_es->fmt;
      switch( i_stream_type )
      {
-@@ -1590,6 +1592,19 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
+@@ -1590,6 +1592,20 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
          fmt->i_original_fourcc = VLC_CODEC_MP1V;
          break;
@@ -254,8 +256,9 @@ index 7ef3dd87211..7f3f221e02b 100644
 +        if( p_sys->standard == TS_STANDARD_ARIB )
 +        {
 +            msg_Info( p_demux, "BML: identifying DSM-CC stream (0x0D)" );
-+            es_format_Change( fmt, SPU_ES, VLC_CODEC_ARIB_BML );
-+            fmt->i_priority = ES_PRIORITY_SELECTABLE_MIN + 1000;
++            /* Use UNKNOWN_ES so no decoder is started; data is delivered entirely
++             * through the sections processor callback (BML_Section_Callback). */
++            es_format_Change( fmt, UNKNOWN_ES, VLC_CODEC_ARIB_BML );
 +            *p_datatype = TS_TRANSPORT_SECTIONS;
 +            ts_sections_processor_Add( p_demux, &p_pes->p_sections_proc, 0, 0,
 +                                       BML_Section_Callback, p_pes );
@@ -265,7 +268,7 @@ index 7ef3dd87211..7f3f221e02b 100644
      case 0x02:  /* MPEG-2 video */
      case 0x80:  /* MPEG-2 MOTO video */
          es_format_Change( fmt, VIDEO_ES, VLC_CODEC_MPGV );
-@@ -1691,6 +1706,22 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1691,6 +1707,26 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
  
      p_pes->i_stream_type = p_dvbpsies->i_type;
  
@@ -275,20 +278,24 @@ index 7ef3dd87211..7f3f221e02b 100644
 +        pespid->i_flags |= FLAG_BML_STICKY;
 +        /* Ensure transport and sections callback are set on the actual active stream */
 +        ts_stream_t *p_active = pespid->u.p_stream;
-+        msg_Info( p_demux, "BML: FillPES – pid %d, p_active sections_proc=%p, transport=%d",
++        msg_Info( p_demux, "BML: FillPES pid %d sections_proc=%p transport_before=%d",
 +                  p_dvbpsies->i_pid, (void*)p_active->p_sections_proc, (int)p_active->transport );
 +        p_active->transport = TS_TRANSPORT_SECTIONS;
 +        p_active->b_always_receive = true;
 +        ts_sections_processor_Add( p_demux, &p_active->p_sections_proc, 0, 0,
 +                                   BML_Section_Callback, p_active );
-+        msg_Info( p_demux, "BML: FillPES – after add: sections_proc=%p",
-+                  (void*)p_active->p_sections_proc );
++        /* Force FLAG_FILTERED so packets are always delivered regardless of
++         * access-control or ES selection state. BML has no VLC decoder. */
++        SetPIDFilter( p_sys, pespid, true );
++        msg_Info( p_demux, "BML: FillPES pid %d done, transport=%d filtered=%d",
++                  p_dvbpsies->i_pid, (int)p_active->transport,
++                  !!(pespid->i_flags & FLAG_FILTERED) );
 +    }
 +
      bool b_registration_applied = false;
      if ( p_dvbpsies->i_type >= 0x80 ) /* non standard, extensions */
      {
-@@ -1729,7 +1760,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
+@@ -1729,7 +1765,8 @@ static void FillPESFromDvbpsiES( demux_t *p_demux,
          case 0x0b:
          case 0x0c:
          case 0x0d:
