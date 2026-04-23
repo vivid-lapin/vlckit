@@ -1,17 +1,20 @@
-From 72515eccde4ad782654918ba8ff1618fc36129f4 Mon Sep 17 00:00:00 2001
+From 9541acbac413395be57643bb1e793d23110a80bb Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Fri, 13 Feb 2026 00:39:21 +0900
-Subject: [PATCH 01/12] demux/mpeg: Add `is-mpegts` demuxer flag and
+Subject: [PATCH] demux/mpeg: Add `is-mpegts` demuxer flag and
  `trust_demux_pos` to refine position calc
 
 ---
- modules/demux/mpeg/ts.c | 54 +++++++++++++++++++++++++++++++++++------
- src/player/player.h     |  3 +++
- src/player/timer.c      | 35 +++++++++++++++++++++++++-
- 3 files changed, 83 insertions(+), 9 deletions(-)
+ modules/demux/mpeg/ts.c                 | 151 ++++++++++++++++++++++--
+ modules/demux/mpeg/ts_streams.c         |   3 +
+ modules/demux/mpeg/ts_streams_private.h |   3 +
+ src/player/input.c                      |  57 ++++++++-
+ src/player/player.h                     |   3 +
+ src/player/timer.c                      |  35 +++++-
+ 6 files changed, 242 insertions(+), 10 deletions(-)
 
 diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
-index 642947e346..44d819f2a7 100644
+index 642947e346c..95f0a0585ee 100644
 --- a/modules/demux/mpeg/ts.c
 +++ b/modules/demux/mpeg/ts.c
 @@ -503,6 +503,10 @@ static int Open( vlc_object_t *p_this )
@@ -34,7 +37,21 @@ index 642947e346..44d819f2a7 100644
               p_pmt &&
               p_pmt->pcr.i_first != VLC_TICK_INVALID &&
               p_pmt->i_last_dts != VLC_TICK_INVALID &&
-@@ -1014,13 +1020,45 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+@@ -955,6 +961,13 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+             }
+         }
+ 
++        if( p_pmt && p_pmt->pcr.i_current_byte != UINT64_MAX &&
++            vlc_stream_GetSize( p_sys->stream, &u64 ) == VLC_SUCCESS )
++        {
++            *pf = (double)p_pmt->pcr.i_current_byte / (double)u64;
++            return VLC_SUCCESS;
++        }
++
+         if( vlc_stream_GetSize( p_sys->stream, &u64 ) == VLC_SUCCESS )
+         {
+             uint64_t offset = vlc_stream_Tell( p_sys->stream );
+@@ -1014,13 +1027,123 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
      {
          vlc_tick_t i_time = va_arg( args, vlc_tick_t );
  
@@ -56,23 +73,99 @@ index 642947e346..44d819f2a7 100644
 +        }
 +        else if( !p_sys->b_canfastseek && p_pmt &&
 +                 p_pmt->pcr.i_current != VLC_TICK_INVALID &&
++                 p_pmt->pcr.i_current_byte != UINT64_MAX &&
 +                 ( p_pmt->pcr.i_first != VLC_TICK_INVALID || p_pmt->pcr.i_first_dts != VLC_TICK_INVALID ) &&
 +                 p_pmt->i_last_dts != VLC_TICK_INVALID )
 +        {
-+            /* 非高速シーク時（ストリーム等）のフォールバックを、
-+             * 現在の絶対バイト位置を基準にした相対移動で行う。 */
 +            vlc_tick_t i_start = (p_pmt->pcr.i_first != VLC_TICK_INVALID) ? p_pmt->pcr.i_first :
 +                                  p_pmt->pcr.i_first_dts;
++            vlc_tick_t i_seektime = i_start + i_time;
++            vlc_tick_t i_current = p_pmt->pcr.i_current;
++            vlc_tick_t i_current_time = i_current - i_start;
 +            vlc_tick_t i_last = p_pmt->i_last_dts + p_pmt->pcr.i_pcroffset;
 +            vlc_tick_t i_duration = i_last - i_start;
 +
 +            uint64_t u64;
 +            if( i_duration > 0 && vlc_stream_GetSize( p_sys->stream, &u64 ) == VLC_SUCCESS )
 +            {
-+                double f_current_pos = (double)vlc_stream_Tell( p_sys->stream ) / (double)u64;
-+                vlc_tick_t i_current_time = p_pmt->pcr.i_current - p_pmt->pcr.i_first;
-+                double f_diff = (double)(i_time - i_current_time) / (double)i_duration;
-+                double f_target = f_current_pos + f_diff;
++                double f_bytes_per_tick = 0.0;
++                vlc_tick_t i_anchor_time = i_current_time;
++
++                if( u64 > 0 )
++                {
++                    double f_current_pos = (double)p_pmt->pcr.i_current_byte / (double)u64;
++                    if( f_current_pos < 0.0 )
++                        f_current_pos = 0.0;
++                    else if( f_current_pos > 1.0 )
++                        f_current_pos = 1.0;
++
++                    vlc_tick_t i_position_time = (vlc_tick_t)((double)i_duration * f_current_pos);
++                    int64_t i_pcr_distance = i_time > i_current_time ?
++                        i_time - i_current_time : i_current_time - i_time;
++                    int64_t i_position_distance = i_time > i_position_time ?
++                        i_time - i_position_time : i_position_time - i_time;
++
++                    if( i_position_distance < i_pcr_distance )
++                        i_anchor_time = i_position_time;
++                }
++
++                int64_t i_time_delta = i_time - i_anchor_time;
++
++                if( p_pmt->pcr.i_previous != VLC_TICK_INVALID &&
++                    p_pmt->pcr.i_previous_byte != UINT64_MAX &&
++                    i_current > p_pmt->pcr.i_previous &&
++                    p_pmt->pcr.i_current_byte > p_pmt->pcr.i_previous_byte )
++                {
++                    f_bytes_per_tick =
++                        (double)( p_pmt->pcr.i_current_byte - p_pmt->pcr.i_previous_byte ) /
++                        (double)( i_current - p_pmt->pcr.i_previous );
++                }
++
++                if( f_bytes_per_tick <= 0.0 )
++                {
++                    if( i_time_delta >= 0 &&
++                        i_last > i_current &&
++                        p_pmt->i_last_dts_byte > p_pmt->pcr.i_current_byte )
++                    {
++                        f_bytes_per_tick =
++                            (double)( p_pmt->i_last_dts_byte - p_pmt->pcr.i_current_byte ) /
++                            (double)( i_last - i_current );
++                    }
++                    else if( i_current_time > 0 && p_pmt->pcr.i_current_byte > 0 )
++                    {
++                        f_bytes_per_tick = (double)p_pmt->pcr.i_current_byte /
++                                           (double)i_current_time;
++                    }
++                }
++
++                if( f_bytes_per_tick > 0.0 )
++                {
++                    double f_target_byte = (double)p_pmt->pcr.i_current_byte +
++                                           (double)i_time_delta * f_bytes_per_tick;
++                    uint64_t i_target = 0;
++                    uint64_t i_max = u64 > p_sys->i_packet_size ?
++                                     u64 - p_sys->i_packet_size : 0;
++
++                    if( f_target_byte <= 0.0 )
++                        i_target = 0;
++                    else if( f_target_byte >= (double)i_max )
++                        i_target = i_max;
++                    else
++                        i_target = (uint64_t)f_target_byte;
++
++                    if( p_sys->i_packet_size > 1 )
++                        i_target -= i_target % p_sys->i_packet_size;
++
++                    if( vlc_stream_Seek( p_sys->stream, i_target ) == VLC_SUCCESS )
++                    {
++                        ReadyQueuesPostSeek( p_demux );
++                        es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME,
++                                        i_seektime - VLC_TICK_0 );
++                        return VLC_SUCCESS;
++                    }
++                }
++
++                double f_target = (double)i_time / (double)i_duration;
 +
 +                if( f_target < 0.0 ) f_target = 0.0;
 +                else if( f_target > 1.0 ) f_target = 1.0;
@@ -80,13 +173,15 @@ index 642947e346..44d819f2a7 100644
 +                if( vlc_stream_Seek( p_sys->stream, (uint64_t)(u64 * f_target) ) == VLC_SUCCESS )
 +                {
 +                    ReadyQueuesPostSeek( p_demux );
++                    es_out_Control( p_demux->out, ES_OUT_SET_NEXT_DISPLAY_TIME,
++                                    i_seektime - VLC_TICK_0 );
 +                    return VLC_SUCCESS;
 +                }
 +            }
          }
          break;
      }
-@@ -1062,8 +1100,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
+@@ -1062,8 +1185,8 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
              }
          }
  
@@ -97,8 +192,154 @@ index 642947e346..44d819f2a7 100644
             ( p_pmt->pcr.i_first != VLC_TICK_INVALID || p_pmt->pcr.i_first_dts != VLC_TICK_INVALID ) &&
               p_pmt->i_last_dts != VLC_TICK_INVALID )
          {
+@@ -1963,6 +2086,9 @@ static void ReadyQueuesPostSeek( demux_t *p_demux )
+             FlushESBuffer( pid->u.p_stream );
+         }
+         p_pmt->pcr.i_current = VLC_TICK_INVALID;
++        p_pmt->pcr.i_previous = VLC_TICK_INVALID;
++        p_pmt->pcr.i_current_byte = UINT64_MAX;
++        p_pmt->pcr.i_previous_byte = UINT64_MAX;
+     }
+ }
+ 
+@@ -2247,6 +2373,7 @@ int ProbeEnd( demux_t *p_demux, int i_program )
+ static void ProgramSetPCR( demux_t *p_demux, ts_pmt_t *p_pmt, vlc_tick_t i_pcr )
+ {
+     demux_sys_t *p_sys = p_demux->p_sys;
++    uint64_t i_pcr_byte = vlc_stream_Tell( p_sys->stream );
+ 
+     /* Check if we have enqueued blocks waiting the/before the
+        PCR barrier, and then adapt pcr so they have valid PCR when dequeuing */
+@@ -2282,7 +2409,15 @@ static void ProgramSetPCR( demux_t *p_demux, ts_pmt_t *p_pmt, vlc_tick_t i_pcr )
+         }
+     }
+ 
++    if( p_pmt->pcr.i_current != VLC_TICK_INVALID &&
++        p_pmt->pcr.i_current_byte != UINT64_MAX )
++    {
++        p_pmt->pcr.i_previous = p_pmt->pcr.i_current;
++        p_pmt->pcr.i_previous_byte = p_pmt->pcr.i_current_byte;
++    }
++
+     p_pmt->pcr.i_current = i_pcr;
++    p_pmt->pcr.i_current_byte = i_pcr_byte;
+ 
+     if( p_pmt->pcr.i_first == VLC_TICK_INVALID )
+     {
+diff --git a/modules/demux/mpeg/ts_streams.c b/modules/demux/mpeg/ts_streams.c
+index d32ff77f429..3d3cb25dc1e 100644
+--- a/modules/demux/mpeg/ts_streams.c
++++ b/modules/demux/mpeg/ts_streams.c
+@@ -112,10 +112,13 @@ ts_pmt_t *ts_pmt_New( demux_t *p_demux )
+     pmt->p_si_sdt_pid = NULL;
+ 
+     pmt->pcr.i_current = VLC_TICK_INVALID;
++    pmt->pcr.i_previous = VLC_TICK_INVALID;
+     pmt->pcr.i_first  = VLC_TICK_INVALID;
+     pmt->pcr.b_disable = false;
+     pmt->pcr.i_first_dts = VLC_TICK_INVALID;
+     pmt->pcr.i_pcroffset = -1;
++    pmt->pcr.i_current_byte = UINT64_MAX;
++    pmt->pcr.i_previous_byte = UINT64_MAX;
+ 
+     pmt->pcr.b_fix_done = false;
+ 
+diff --git a/modules/demux/mpeg/ts_streams_private.h b/modules/demux/mpeg/ts_streams_private.h
+index 03b3db17c06..65a97aec52a 100644
+--- a/modules/demux/mpeg/ts_streams_private.h
++++ b/modules/demux/mpeg/ts_streams_private.h
+@@ -60,10 +60,13 @@ struct ts_pmt_t
+     struct
+     {
+         vlc_tick_t i_current;
++        vlc_tick_t i_previous;
+         vlc_tick_t i_first; // seen <> != TS_TICK_UNKNOWN
+         /* broken PCR handling */
+         vlc_tick_t i_first_dts;
+         vlc_tick_t i_pcroffset;
++        uint64_t i_current_byte;
++        uint64_t i_previous_byte;
+         bool    b_disable; /* ignore PCR field, use dts */
+         bool    b_fix_done;
+     } pcr;
+diff --git a/src/player/input.c b/src/player/input.c
+index c95202caa33..f52a736b8af 100644
+--- a/src/player/input.c
++++ b/src/player/input.c
+@@ -62,6 +62,40 @@ vlc_player_input_GetPos(struct vlc_player_input *input, bool seeking,
+     return input->position;
+ }
+ 
++static bool
++vlc_player_input_GetRelativeTimeSeekPos(struct vlc_player_input *input,
++                                        vlc_tick_t delta,
++                                        vlc_tick_t system_now,
++                                        double *position)
++{
++    vlc_player_t *player = input->player;
++    vlc_tick_t length = VLC_TICK_INVALID;
++
++    vlc_mutex_lock(&player->timer.lock);
++    if (player->timer.trust_demux_pos == 1
++     && !player->timer.best_source.point.live
++     && player->timer.best_source.point.length != VLC_TICK_INVALID)
++        length = player->timer.best_source.point.length;
++    vlc_mutex_unlock(&player->timer.lock);
++
++    if (length == VLC_TICK_INVALID)
++        return false;
++
++    double pos = vlc_player_input_GetPos(input, true, system_now);
++    if (pos < 0.0)
++        return false;
++
++    pos += delta / (double) length;
++
++    if (pos < 0.0)
++        pos = 0.0;
++    else if (pos > 1.0)
++        pos = 1.0;
++
++    *position = pos;
++    return true;
++}
++
+ bool
+ vlc_player_input_HandleAtoBLoop(struct vlc_player_input *input, bool forced)
+ {
+@@ -152,8 +186,29 @@ vlc_player_input_SeekByTime(struct vlc_player_input *input, vlc_tick_t time,
+     vlc_player_t *player = input->player;
+     vlc_player_assert_seek_params(speed, whence);
+ 
++    vlc_tick_t system_now = vlc_tick_now();
++
+     if (whence != VLC_PLAYER_WHENCE_ABSOLUTE)
+-        time += vlc_player_input_GetTime(input, true, vlc_tick_now());
++    {
++        double position;
++        if (vlc_player_input_GetRelativeTimeSeekPos(input, time, system_now,
++                                                    &position))
++        {
++            vlc_player_UpdateTimerSeekState(player, VLC_TICK_INVALID, position);
++
++            int ret = input_ControlPush(input->thread, INPUT_CONTROL_SET_POSITION,
++                &(input_control_param_t) {
++                    .pos.f_val = position,
++                    .pos.b_fast_seek = speed == VLC_PLAYER_SEEK_FAST,
++            });
++
++            if (ret == VLC_SUCCESS)
++                vlc_player_osd_Position(player, input, VLC_TICK_INVALID, position);
++            return;
++        }
++
++        time += vlc_player_input_GetTime(input, true, system_now);
++    }
+ 
+     if (time < VLC_TICK_0)
+         time = VLC_TICK_0;
 diff --git a/src/player/player.h b/src/player/player.h
-index 8df05b287a..83382450b9 100644
+index 8df05b287a6..83382450b93 100644
 --- a/src/player/player.h
 +++ b/src/player/player.h
 @@ -228,6 +228,9 @@ struct vlc_player_timer
@@ -112,7 +353,7 @@ index 8df05b287a..83382450b9 100644
      double seek_position;
      bool paused;
 diff --git a/src/player/timer.c b/src/player/timer.c
-index 7448ac1b65..5d4c1c3819 100644
+index 7448ac1b656..5d4c1c38195 100644
 --- a/src/player/timer.c
 +++ b/src/player/timer.c
 @@ -40,6 +40,7 @@ vlc_player_ResetTimer(vlc_player_t *player)
