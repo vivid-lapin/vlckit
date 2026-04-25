@@ -18,7 +18,6 @@ build
 /vlc-unstable
 DerivedData
 MobileVLCKit/ImportedSources
-/libvlc/vlc
 Tests/Assets
 Headers/Internal/vlc-plugins-*
 VLCKit-*
