@@ -1,0 +1,57 @@
+From 3d118d23bbaf99fa06d3a6df95ed50ad338929b5 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 26 Apr 2026 16:58:34 +0900
+Subject: [PATCH] demux/mpeg: Retry ProbeEnd from an earlier offset on
+ immediate EOS
+
+When ProbeEnd seeks to (stream_size - probe_window) and ReadTSPacket
+returns NULL on the very first read (i_count == 1), the probe position
+has landed at or past the actual end of TS content.  This can happen
+when Content-Length includes trailing padding or when an HTTP server
+reports a size slightly larger than the available data.
+
+The previous code treated i_count < PROBE_CHUNK_COUNT uniformly as
+"we have seen the entire tail" and broke out of the loop, causing
+ProbeEnd to fail with no PCR found.
+
+Distinguish the two cases:
+ - i_count > 1: we read a partial tail; any PCR it contained has
+   already been recorded.  Break as before.
+ - i_count == 1: immediate EOF at the probe point; go one
+   PROBE_CHUNK_COUNT step further back and retry, up to PROBE_MAX.
+---
+ modules/demux/mpeg/ts.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 7b7b461f6eb..a7a28a058e1 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -2269,10 +2269,20 @@ int ProbeEnd( demux_t *p_demux, int i_program )
+ 
+         int i_count = ProbeChunk( p_demux, i_program, true, &b_found );
+         if( i_count < PROBE_CHUNK_COUNT )
+-            break;
+-
+-        /* Go ahead one more chunk if end of file contained only stuffing packets */
+-        i_probe_count += i_count;
++        {
++            /* i_count == 1 means ReadTSPacket returned NULL on the very first
++             * attempt after seeking: the probe position landed at or past the
++             * actual end of content (e.g. Content-Length includes trailing
++             * padding).  Try a further-back position before giving up. */
++            if( i_count > 1 )
++                break;
++            i_probe_count += PROBE_CHUNK_COUNT;
++        }
++        else
++        {
++            /* Go ahead one more chunk if end of file contained only stuffing packets */
++            i_probe_count += i_count;
++        }
+     } while( i_pos > 0 && !b_found &&
+              i_probe_count < PROBE_MAX );
+ 
+-- 
+2.39.1
+
