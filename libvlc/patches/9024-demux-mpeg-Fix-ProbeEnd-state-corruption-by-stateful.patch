@@ -1,0 +1,98 @@
+From dffd84c9ea5ced8ae42f39ae718aa8a040b673cd Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 26 Apr 2026 16:58:34 +0900
+Subject: [PATCH] demux/mpeg: Fix ProbeEnd state corruption by stateful stream
+ filters
+
+Two related fixes for stream duration detection over HTTP with stateful
+stream filters (e.g. arib_dualmono):
+
+1. Call ProbeEnd before ProbeStart.
+
+   A stateful stream filter may update its internal PCR pid when it
+   processes PAT/PMT packets.  ProbeStart reads from the beginning of
+   the file and encounters the first PMT there; if the PCR pid changed
+   partway through the file the filter rewrites its internal state to
+   match the old value.  The subsequent ProbeEnd then scans the tail
+   with the wrong PCR pid, silently dropping the actual PCR packets and
+   returning no result.
+
+   Fix by running ProbeEnd first (while the filter state is still
+   aligned with the current PCR pid) and ProbeStart second.
+
+2. Retry ProbeEnd from an earlier offset on immediate EOS.
+
+   When vlc_stream_GetSize returns a size larger than the actual TS
+   content (e.g. trailing HTTP padding or a premature connection close),
+   the first ProbeChunk call after seeking may return i_count == 1
+   (ReadTSPacket NULL on the very first try).  The previous code treated
+   this the same as a partial tail read and gave up immediately.
+
+   Distinguish the two cases: i_count > 1 means a partial tail was read
+   and any PCR found is already recorded so we break as before;
+   i_count == 1 means we landed at or past the actual content end, so
+   advance one PROBE_CHUNK_COUNT step further back and retry, up to
+   PROBE_MAX.
+---
+ modules/demux/mpeg/ts.c     | 18 ++++++++++++++----
+ modules/demux/mpeg/ts_psi.c | 12 ++++++++++--
+ 2 files changed, 24 insertions(+), 6 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index 7b7b461f6eb..a7a28a058e1 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -2269,10 +2269,20 @@ int ProbeEnd( demux_t *p_demux, int i_program )
+ 
+         int i_count = ProbeChunk( p_demux, i_program, true, &b_found );
+         if( i_count < PROBE_CHUNK_COUNT )
+-            break;
+-
+-        /* Go ahead one more chunk if end of file contained only stuffing packets */
+-        i_probe_count += i_count;
++        {
++            /* i_count == 1 means ReadTSPacket returned NULL on the very first
++             * attempt after seeking: the probe position landed at or past the
++             * actual end of content (e.g. Content-Length includes trailing
++             * padding).  Try a further-back position before giving up. */
++            if( i_count > 1 )
++                break;
++            i_probe_count += PROBE_CHUNK_COUNT;
++        }
++        else
++        {
++            /* Go ahead one more chunk if end of file contained only stuffing packets */
++            i_probe_count += i_count;
++        }
+     } while( i_pos > 0 && !b_found &&
+              i_probe_count < PROBE_MAX );
+ 
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index 0ca173d1b4a..f9c518fe83c 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -2247,11 +2247,19 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+     if( p_sys->b_canseek &&
+         (!p_pmt->b_last_dts_probed || b_pcr_pid_changed || p_pmt->i_last_dts == VLC_TICK_INVALID) )
+     {
+-        if( !p_pmt->b_last_dts_probed )
+-            ProbeStart( p_demux, p_pmt->i_number );
+         if( b_pcr_pid_changed )
+             p_pmt->i_last_dts = VLC_TICK_INVALID;
++        /* ProbeEnd must run before ProbeStart so that any stateful stream
++         * filter (e.g. arib_dualmono) still has the correct PCR pid in its
++         * internal state.  ProbeStart reads from the beginning of the file
++         * and will process the first PMT it finds there; if the PCR pid
++         * changed since the start of the file the filter would update its
++         * internal PCR pid to the old value, causing PCR packets for the
++         * current pid to be silently dropped during the subsequent ProbeEnd
++         * tail scan. */
+         ProbeEnd( p_demux, p_pmt->i_number );
++        if( !p_pmt->b_last_dts_probed )
++            ProbeStart( p_demux, p_pmt->i_number );
+         p_pmt->b_last_dts_probed = true;
+         if( p_pmt->i_last_dts != VLC_TICK_INVALID &&
+             p_pmt->i_last_dts < p_pmt->pcr.i_first_dts )
+-- 
+2.39.1
+
