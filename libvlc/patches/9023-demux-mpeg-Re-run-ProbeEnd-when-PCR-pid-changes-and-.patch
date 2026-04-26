@@ -1,0 +1,41 @@
+From 3b2e89998da3407fc3add5c257b15a1cbe0c7905 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Sun, 26 Apr 2026 15:29:10 +0900
+Subject: [PATCH] demux/mpeg: Re-run ProbeEnd when PCR pid changes and duration
+ is unknown
+
+When a PMT update changes the PCR pid (e.g. ARIB broadcasts where the
+PCR pid switches partway through the file), ProbeEnd may fail to find
+a PCR at the end of the file because it only knows the original PCR pid.
+The b_last_dts_probed flag then prevents a retry when the new PMT arrives
+with the correct PCR pid, leaving i_last_dts as VLC_TICK_INVALID and
+causing DEMUX_GET_LENGTH to return VLC_EGENERIC.
+
+Fix this by re-running ProbeEnd (but not ProbeStart, since i_first is
+already valid) whenever i_last_dts is still VLC_TICK_INVALID on a
+subsequent PMT update.
+---
+ modules/demux/mpeg/ts_psi.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
+index 7ef3dd87211..54b58306413 100644
+--- a/modules/demux/mpeg/ts_psi.c
++++ b/modules/demux/mpeg/ts_psi.c
+@@ -2242,9 +2242,11 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
+     UpdatePESFilters( p_demux, p_sys->seltype == PROGRAM_ALL );
+ 
+     /* Probe Boundaries */
+-    if( p_sys->b_canseek && !p_pmt->b_last_dts_probed )
++    if( p_sys->b_canseek &&
++        (!p_pmt->b_last_dts_probed || p_pmt->i_last_dts == VLC_TICK_INVALID) )
+     {
+-        ProbeStart( p_demux, p_pmt->i_number );
++        if( !p_pmt->b_last_dts_probed )
++            ProbeStart( p_demux, p_pmt->i_number );
+         ProbeEnd( p_demux, p_pmt->i_number );
+         p_pmt->b_last_dts_probed = true;
+         if( p_pmt->i_last_dts != VLC_TICK_INVALID &&
+-- 
+2.39.1
+
