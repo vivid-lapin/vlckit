@@ -1,7 +1,7 @@
-From 30176056432062b0096bca64eb57639284da7e4a Mon Sep 17 00:00:00 2001
+From 7889f60a8936203e9cea4b40481538562efc1c4d Mon Sep 17 00:00:00 2001
 From: ci7lus <7887955+ci7lus@users.noreply.github.com>
 Date: Sat, 21 Feb 2026 21:23:20 +0900
-Subject: [PATCH 2/4] feat: Add arib_dualmono stream filter
+Subject: [PATCH] feat: Add arib_dualmono stream filter
 
 ---
  contrib/src/tsreadex/SHA512SUMS               |   1 +
@@ -17,20 +17,20 @@ Subject: [PATCH 2/4] feat: Add arib_dualmono stream filter
 
 diff --git a/contrib/src/tsreadex/SHA512SUMS b/contrib/src/tsreadex/SHA512SUMS
 new file mode 100644
-index 0000000000..e5c5186e94
+index 00000000000..b84dc5d478b
 --- /dev/null
 +++ b/contrib/src/tsreadex/SHA512SUMS
 @@ -0,0 +1 @@
-+c864573101f402585f68693c9f586b976647885157535109a3da7ff3d9c66f3d0d8747f827304d79aa5312c3232ca5ca36766f508d2e092b51904c0e968f367d  tsreadex-772a2b2f19c4c6907aa5486b00e9c78ef6a025d7.tar.gz
++56df406381707762548d9a3125d0603069eccd9bbd3d04667efac59954bf70959f342f8ec12bd91cf9ff62f04cbf29e1581a1414100200f30e349c9860504a4c  tsreadex-ef0335480e3f7890909e78a0091b146cebcdcfe5.tar.gz
 diff --git a/contrib/src/tsreadex/rules.mak b/contrib/src/tsreadex/rules.mak
 new file mode 100644
-index 0000000000..5b214e3394
+index 00000000000..11b3a80d278
 --- /dev/null
 +++ b/contrib/src/tsreadex/rules.mak
 @@ -0,0 +1,24 @@
 +# tsreadex
 +
-+TSREADEX_GIT_HASH := 772a2b2f19c4c6907aa5486b00e9c78ef6a025d7
++TSREADEX_GIT_HASH := ef0335480e3f7890909e78a0091b146cebcdcfe5
 +TSREADEX_URL := https://github.com/neneka/tsreadex/archive/$(TSREADEX_GIT_HASH).tar.gz
 +
 +PKGS += tsreadex
@@ -53,7 +53,7 @@ index 0000000000..5b214e3394
 +	cd $< && install -m 644 libtsreadex.a "$(PREFIX)/lib/"
 +	touch $@
 diff --git a/modules/demux/mpeg/ts_psi.c b/modules/demux/mpeg/ts_psi.c
-index 17c909fd44..7ef3dd8721 100644
+index 17c909fd44e..7ef3dd87211 100644
 --- a/modules/demux/mpeg/ts_psi.c
 +++ b/modules/demux/mpeg/ts_psi.c
 @@ -2130,6 +2130,21 @@ static void PMTCallBack( void *data, dvbpsi_pmt_t *p_dvbpsipmt )
@@ -79,7 +79,7 @@ index 17c909fd44..7ef3dd8721 100644
      if ( p_sys->standard == TS_STANDARD_ATSC )
      {
 diff --git a/modules/stream_filter/Makefile.am b/modules/stream_filter/Makefile.am
-index 1d6a5499b2..aa14a96201 100644
+index 1d6a5499b2e..aa14a962010 100644
 --- a/modules/stream_filter/Makefile.am
 +++ b/modules/stream_filter/Makefile.am
 @@ -46,3 +46,8 @@ stream_filter_LTLIBRARIES += libadf_plugin.la
@@ -93,7 +93,7 @@ index 1d6a5499b2..aa14a96201 100644
 +stream_filter_LTLIBRARIES += libarib_dualmono_plugin.la
 diff --git a/modules/stream_filter/arib_dualmono/arib_dualmono.cpp b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
 new file mode 100644
-index 0000000000..0e069cd4b2
+index 00000000000..0e069cd4b26
 --- /dev/null
 +++ b/modules/stream_filter/arib_dualmono/arib_dualmono.cpp
 @@ -0,0 +1,211 @@
@@ -309,7 +309,7 @@ index 0000000000..0e069cd4b2
 +    free(p_sys);
 +}
 diff --git a/modules/stream_filter/meson.build b/modules/stream_filter/meson.build
-index 9f9ae2cd80..2e196be902 100644
+index 9f9ae2cd801..2e196be9021 100644
 --- a/modules/stream_filter/meson.build
 +++ b/modules/stream_filter/meson.build
 @@ -52,3 +52,11 @@ vlc_modules += {
