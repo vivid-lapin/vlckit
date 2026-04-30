@@ -18,6 +18,20 @@ spopd()
     popd > /dev/null
 }
 
+append_framework_from_archive()
+{
+    archive_name="$1"
+    framework_path="$BUILD_DIR/${archive_name}.xcarchive/Products/Library/Frameworks/VLCKit.framework"
+    dsym_path="$BUILD_DIR/${archive_name}.xcarchive/dSYMs/VLCKit.framework.dSYM"
+
+    if [ -d "$framework_path" ]; then
+        frameworks="$frameworks -framework $framework_path"
+        if [ -d "$dsym_path" ]; then
+            frameworks="$frameworks -debug-symbols $dsym_path"
+        fi
+    fi
+}
+
 IOS=no
 TVOS=no
 MACOS=no
@@ -169,48 +183,39 @@ if [ "$MACOS" = "yes" ]; then
         info "VLCKit for macOS not found for distribution, creating... this will take long"
         ./compileAndBuildVLCKit.sh -x -f -r -a aarch64
     fi
-    dsymfolder=$BUILD_DIR/VLCKit-macosx.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-macosx.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
+    append_framework_from_archive "VLCKit-macosx"
 fi
 if [ "$TVOS" = "yes" ]; then
     if [ ! -e "build/tvOS/VLCKit.xcframework" ]; then
         info "VLCKit for tvOS not found for distribution, creating... this will take long"
         ./compileAndBuildVLCKit.sh -f -t
     fi
-    dsymfolder=$BUILD_DIR/VLCKit-appletvsimulator.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-appletvsimulator.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
-    dsymfolder=$BUILD_DIR/VLCKit-appletvos.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-appletvos.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
+    append_framework_from_archive "VLCKit-appletvsimulator"
+    append_framework_from_archive "VLCKit-appletvos"
 fi
 if [ "$IOS" = "yes" ]; then
     if [ ! -e "build/iOS/VLCKit.xcframework" ]; then
         info "VLCKit for iOS not found for distribution, creating... this will take long"
         ./compileAndBuildVLCKit.sh -f -r -a aarch64
     fi
-    dsymfolder=$BUILD_DIR/VLCKit-iphonesimulator.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-iphonesimulator.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
-    dsymfolder=$BUILD_DIR/VLCKit-iphoneos.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-iphoneos.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
+    append_framework_from_archive "VLCKit-iphonesimulator"
+    append_framework_from_archive "VLCKit-iphoneos"
 fi
 if [ "$XROS" = "yes" ]; then
     if [ ! -e "build/xrOS/VLCKit.xcframework" ]; then
         info "VLCKit for xrOS not found for distribution, creating... this will take long"
         ./compileAndBuildVLCKit.sh -i -f
     fi
-    dsymfolder=$BUILD_DIR/VLCKit-xrsimulator.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-xrsimulator.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
-    dsymfolder=$BUILD_DIR/VLCKit-xros.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-xros.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
+    append_framework_from_archive "VLCKit-xrsimulator"
+    append_framework_from_archive "VLCKit-xros"
 fi
 if [ "$WATCHOS" = "yes" ]; then
     if [ ! -e "build/watchOS/VLCKit.xcframework" ]; then
         info "VLCKit for xrOS not found for distribution, creating... this will take long"
         ./compileAndBuildVLCKit.sh -w -f
     fi
-    dsymfolder=$BUILD_DIR/VLCKit-watchsimulator.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-watchsimulator.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
-    dsymfolder=$BUILD_DIR/VLCKit-watchos.xcarchive/dSYMs/VLCKit.framework.dSYM
-    frameworks="$frameworks -framework $BUILD_DIR/VLCKit-watchos.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
+    append_framework_from_archive "VLCKit-watchsimulator"
+    append_framework_from_archive "VLCKit-watchos"
 fi
 
 info "Deleting previous data"
