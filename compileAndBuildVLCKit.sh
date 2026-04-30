@@ -109,6 +109,44 @@ platform_supports_arch() {
     esac
 }
 
+resolve_build_platform() {
+    requested_platform="$1"
+
+    if [ "$TVOS" = "yes" ]; then
+        if [ "$requested_platform" = "iphonesimulator" ]; then
+            echo "appletvsimulator"
+        else
+            echo "appletvos"
+        fi
+        return 0
+    fi
+    if [ "$IOS" = "yes" ]; then
+        echo "$requested_platform"
+        return 0
+    fi
+    if [ "$MACOS" = "yes" ]; then
+        if [ "$requested_platform" = "iphoneos" ]; then
+            echo "macosx"
+        fi
+        return 0
+    fi
+    if [ "$XROS" = "yes" ]; then
+        if [ "$requested_platform" = "iphonesimulator" ]; then
+            echo "xrsimulator"
+        else
+            echo "xros"
+        fi
+        return 0
+    fi
+    if [ "$WATCHOS" = "yes" ]; then
+        if [ "$requested_platform" = "iphonesimulator" ]; then
+            echo "watchsimulator"
+        else
+            echo "watchos"
+        fi
+    fi
+}
+
 spushd()
 {
      pushd "$1" 2>&1> /dev/null
@@ -298,11 +336,15 @@ buildMobileKit() {
                 echo "*** Framework ARCH: ${FARCH} is invalid ***"
                 exit 1
             fi
-            if ! platform_supports_arch "$PLATFORM" "$FARCH"; then
+            RESOLVED_PLATFORM=`resolve_build_platform "$PLATFORM"`
+            if [ -z "$RESOLVED_PLATFORM" ]; then
+                return 0
+            fi
+            if ! platform_supports_arch "$RESOLVED_PLATFORM" "$FARCH"; then
                 return 0
             fi
 
-            buildLibVLC $FARCH "$PLATFORM"
+            buildLibVLC $FARCH "$RESOLVED_PLATFORM"
         fi
     fi
 }
