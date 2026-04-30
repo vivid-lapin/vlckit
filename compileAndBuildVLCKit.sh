@@ -80,6 +80,35 @@ is_simulator_arch() {
     fi
 }
 
+platform_supports_arch() {
+    platform="$1"
+    arch="$2"
+
+    case "$platform" in
+        iphonesimulator|appletvsimulator|watchsimulator)
+            [ "$arch" = "x86_64" ] || [ "$arch" = "aarch64" ]
+            ;;
+        xrsimulator)
+            [ "$arch" = "aarch64" ]
+            ;;
+        iphoneos)
+            [ "$arch" = "armv7" ] || [ "$arch" = "aarch64" ]
+            ;;
+        appletvos|xros)
+            [ "$arch" = "aarch64" ]
+            ;;
+        watchos)
+            [ "$arch" = "arm64_32" ] || [ "$arch" = "aarch64" ]
+            ;;
+        macosx)
+            [ "$arch" = "x86_64" ] || [ "$arch" = "aarch64" ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 spushd()
 {
      pushd "$1" 2>&1> /dev/null
@@ -269,38 +298,8 @@ buildMobileKit() {
                 echo "*** Framework ARCH: ${FARCH} is invalid ***"
                 exit 1
             fi
-            if (is_simulator_arch $FARCH);then
-                if [ "$TVOS" = "yes" ]; then
-                    PLATFORM="appletvsimulator"
-                fi
-                if [ "$IOS" = "yes" ]; then
-                    PLATFORM="iphonesimulator"
-                fi
-                if [ "$MACOS" = "yes" ]; then
-                    PLATFORM="macosx"
-                fi
-                if [ "$XROS" = "yes" ]; then
-                    PLATFORM="xrsimulator"
-                fi
-                if [ "$WATCHOS" = "yes" ]; then
-                    PLATFORM="watchsimulator"
-                fi
-            else
-                if [ "$TVOS" = "yes" ]; then
-                    PLATFORM="appletvos"
-                fi
-                if [ "$IOS" = "yes" ]; then
-                    PLATFORM="iphoneos"
-                fi
-                if [ "$MACOS" = "yes" ]; then
-                    PLATFORM="macosx"
-                fi
-                if [ "$XROS" = "yes" ]; then
-                    PLATFORM="xros"
-                fi
-                if [ "$WATCHOS" = "yes" ]; then
-                    PLATFORM="watchos"
-                fi
+            if ! platform_supports_arch "$PLATFORM" "$FARCH"; then
+                return 0
             fi
 
             buildLibVLC $FARCH "$PLATFORM"
@@ -613,7 +612,7 @@ if [ "$TVOS" = "yes" ]; then
 
     frameworks=""
     platform=""
-    if [ "$FARCH" = "all" ] || (! is_simulator_arch $FARCH);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "appletvos" "$FARCH";then
         platform="appletvos"
         buildxcodeproj VLCKit ${platform} tvOS
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
@@ -629,7 +628,7 @@ if [ "$TVOS" = "yes" ]; then
             spopd
         fi
     fi
-    if [ "$FARCH" = "all" ] || (is_simulator_arch $arch);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "appletvsimulator" "$FARCH";then
         platform="appletvsimulator"
         buildxcodeproj VLCKit ${platform} "tvOS Simulator"
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
@@ -650,7 +649,7 @@ if [ "$IOS" = "yes" ]; then
 
     frameworks=""
     platform=""
-    if [ "$FARCH" = "all" ] || (! is_simulator_arch $FARCH);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "iphoneos" "$FARCH";then
         platform="iphoneos"
         buildxcodeproj VLCKit ${platform} iOS
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
@@ -666,7 +665,7 @@ if [ "$IOS" = "yes" ]; then
             spopd
         fi
     fi
-    if [ "$FARCH" = "all" ] || (is_simulator_arch $arch);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "iphonesimulator" "$FARCH";then
         platform="iphonesimulator"
         buildxcodeproj VLCKit ${platform} "iOS Simulator"
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
@@ -687,13 +686,13 @@ if [ "$XROS" = "yes" ]; then
 
     frameworks=""
     platform=""
-    if [ "$FARCH" = "all" ] || (! is_simulator_arch $FARCH);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "xros" "$FARCH";then
         platform="xros"
         buildxcodeproj VLCKit ${platform} xrOS
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
         frameworks="$frameworks -framework VLCKit-${platform}.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
     fi
-    if [ "$FARCH" = "all" ] || (is_simulator_arch $arch);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "xrsimulator" "$FARCH";then
         platform="xrsimulator"
         buildxcodeproj VLCKit ${platform} "xrOS Simulator"
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
@@ -714,13 +713,13 @@ if [ "$WATCHOS" = "yes" ]; then
 
     frameworks=""
     platform=""
-    if [ "$FARCH" = "all" ] || (! is_simulator_arch $FARCH);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "watchos" "$FARCH";then
         platform="watchos"
         buildxcodeproj VLCKit ${platform} watchOS
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
         frameworks="$frameworks -framework VLCKit-${platform}.xcarchive/Products/Library/Frameworks/VLCKit.framework -debug-symbols $dsymfolder"
     fi
-    if [ "$FARCH" = "all" ] || (is_simulator_arch $arch);then
+    if [ "$FARCH" = "all" ] || platform_supports_arch "watchsimulator" "$FARCH";then
         platform="watchsimulator"
         buildxcodeproj VLCKit ${platform} "watchOS Simulator"
         dsymfolder=$PROJECT_DIR/build/VLCKit-${platform}.xcarchive/dSYMs/VLCKit.framework.dSYM
