@@ -1,0 +1,28 @@
+From bd0a220849ac7236cca11ee5ebc00eba4dab72a4 Mon Sep 17 00:00:00 2001
+From: ci7lus <7887955+ci7lus@users.noreply.github.com>
+Date: Tue, 5 May 2026 13:11:01 +0900
+Subject: [PATCH] demux/mpeg: Fix ProbeEnd aborting prematurely on failure
+
+---
+ modules/demux/mpeg/ts.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/modules/demux/mpeg/ts.c b/modules/demux/mpeg/ts.c
+index a7a28a058e1..b7de129c648 100644
+--- a/modules/demux/mpeg/ts.c
++++ b/modules/demux/mpeg/ts.c
+@@ -2273,9 +2273,8 @@ int ProbeEnd( demux_t *p_demux, int i_program )
+             /* i_count == 1 means ReadTSPacket returned NULL on the very first
+              * attempt after seeking: the probe position landed at or past the
+              * actual end of content (e.g. Content-Length includes trailing
+-             * padding).  Try a further-back position before giving up. */
+-            if( i_count > 1 )
+-                break;
++             * padding). Any other value < PROBE_CHUNK_COUNT also means we hit
++             * EOF prematurely. Try a further-back position before giving up. */
+             i_probe_count += PROBE_CHUNK_COUNT;
+         }
+         else
+-- 
+2.39.1
+
