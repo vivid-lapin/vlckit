@@ -181,7 +181,7 @@ spushd ${root}
 if [ "$MACOS" = "yes" ]; then
     if [ ! -e "build/macOS/VLCKit.xcframework" ]; then
         info "VLCKit for macOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -x -f -r -a aarch64
+        ./compileAndBuildVLCKit.sh -x -f -r
     fi
     append_framework_from_archive "VLCKit-macosx"
 fi
@@ -196,7 +196,7 @@ fi
 if [ "$IOS" = "yes" ]; then
     if [ ! -e "build/iOS/VLCKit.xcframework" ]; then
         info "VLCKit for iOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -f -r -a aarch64
+        ./compileAndBuildVLCKit.sh -f -r
     fi
     append_framework_from_archive "VLCKit-iphonesimulator"
     append_framework_from_archive "VLCKit-iphoneos"
