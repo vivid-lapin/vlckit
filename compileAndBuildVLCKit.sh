@@ -30,7 +30,7 @@ if [ -z "$MAKEFLAGS" ]; then
     MAKEFLAGS="-j$(sysctl -n machdep.cpu.core_count || nproc)";
 fi
 
-TESTEDHASH="c833c4be0" # libvlc hash that this version of VLCKit is build on
+TESTEDHASH="9c075cdb5b13c1f3cd64eab0023ad19d22bca6c3" # libvlc hash that this version of VLCKit is build on
 
 usage()
 {
@@ -562,17 +562,17 @@ if [ "$VLCROOT" = "" ]; then
 
     if [ "$NONETWORK" != "yes" ]; then
         if ! [ -e vlc ]; then
-            git clone https://code.videolan.org/videolan/vlc.git --branch master --single-branch vlc
+            git clone https://github.com/neneka/vlc.git --branch master --single-branch vlc
             info "Applying patches to vlc.git"
             cd vlc
             git checkout -B localBranch ${TESTEDHASH}
             git branch --set-upstream-to=origin/master localBranch
-            git am ${ROOT_DIR}/libvlc/patches/*.patch
-            if [ $? -ne 0 ]; then
-                git am --abort
-                info "Applying the patches failed, aborting git-am"
-                exit 1
-            fi
+            # git am ${ROOT_DIR}/libvlc/patches/*.patch
+            # if [ $? -ne 0 ]; then
+            #     git am --abort
+            #     info "Applying the patches failed, aborting git-am"
+            #     exit 1
+            # fi
             cd ..
         else
             cd vlc
