@@ -109,8 +109,10 @@ done
 shift $(($OPTIND - 1))
 
 out="/dev/null"
+verbose_flag=""
 if [ "$VERBOSE" = "yes" ]; then
    out="/dev/stdout"
+   verbose_flag="-v"
 fi
 
 if [ "x$1" != "x" ]; then
@@ -181,14 +183,14 @@ spushd ${root}
 if [ "$MACOS" = "yes" ]; then
     if [ ! -e "build/macOS/VLCKit.xcframework" ]; then
         info "VLCKit for macOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -x -f -r
+        ./compileAndBuildVLCKit.sh -x -f -r ${verbose_flag}
     fi
     append_framework_from_archive "VLCKit-macosx"
 fi
 if [ "$TVOS" = "yes" ]; then
     if [ ! -e "build/tvOS/VLCKit.xcframework" ]; then
         info "VLCKit for tvOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -f -t
+        ./compileAndBuildVLCKit.sh -f -t ${verbose_flag}
     fi
     append_framework_from_archive "VLCKit-appletvsimulator"
     append_framework_from_archive "VLCKit-appletvos"
@@ -196,7 +198,7 @@ fi
 if [ "$IOS" = "yes" ]; then
     if [ ! -e "build/iOS/VLCKit.xcframework" ]; then
         info "VLCKit for iOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -f -r
+        ./compileAndBuildVLCKit.sh -f -r ${verbose_flag}
     fi
     append_framework_from_archive "VLCKit-iphonesimulator"
     append_framework_from_archive "VLCKit-iphoneos"
@@ -204,7 +206,7 @@ fi
 if [ "$XROS" = "yes" ]; then
     if [ ! -e "build/xrOS/VLCKit.xcframework" ]; then
         info "VLCKit for xrOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -i -f
+        ./compileAndBuildVLCKit.sh -i -f ${verbose_flag}
     fi
     append_framework_from_archive "VLCKit-xrsimulator"
     append_framework_from_archive "VLCKit-xros"
@@ -212,7 +214,7 @@ fi
 if [ "$WATCHOS" = "yes" ]; then
     if [ ! -e "build/watchOS/VLCKit.xcframework" ]; then
         info "VLCKit for xrOS not found for distribution, creating... this will take long"
-        ./compileAndBuildVLCKit.sh -w -f
+        ./compileAndBuildVLCKit.sh -w -f ${verbose_flag}
     fi
     append_framework_from_archive "VLCKit-watchsimulator"
     append_framework_from_archive "VLCKit-watchos"
