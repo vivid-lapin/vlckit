@@ -578,7 +578,7 @@ if [ "$VLCROOT" = "" ]; then
             cd vlc
             git fetch --all
             git reset --hard ${TESTEDHASH}
-            git am ${ROOT_DIR}/libvlc/patches/*.patch
+            # git am ${ROOT_DIR}/libvlc/patches/*.patch
             cd ..
         fi
     fi
