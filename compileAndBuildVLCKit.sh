@@ -30,7 +30,8 @@ if [ -z "$MAKEFLAGS" ]; then
     MAKEFLAGS="-j$(sysctl -n machdep.cpu.core_count || nproc)";
 fi
 
-TESTEDHASH="6790ff9e739299f78e2e4cfe3ba202365971e9b2" # libvlc hash that this version of VLCKit is build on
+TESTEDHASH="5f56046b2ceba2da0c1fa71f7d3be2ebcc941e9b" # libvlc hash that this version of VLCKit is build on
+BRANCH="chore/fix-seeking"
 
 usage()
 {
@@ -562,11 +563,12 @@ if [ "$VLCROOT" = "" ]; then
 
     if [ "$NONETWORK" != "yes" ]; then
         if ! [ -e vlc ]; then
-            git clone https://github.com/neneka/vlc.git --branch master --single-branch vlc
+
+            git clone https://github.com/neneka/vlc.git --branch "$BRANCH" --single-branch vlc
             info "Applying patches to vlc.git"
             cd vlc
             git checkout -B localBranch ${TESTEDHASH}
-            git branch --set-upstream-to=origin/master localBranch
+            git branch --set-upstream-to="origin/$BRANCH" localBranch
             # git am ${ROOT_DIR}/libvlc/patches/*.patch
             # if [ $? -ne 0 ]; then
             #     git am --abort
